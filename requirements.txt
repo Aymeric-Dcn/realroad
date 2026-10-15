@@ -1,0 +1,9 @@
+requests
+pyyaml
+numpy
+pyproj
+shapely>=2.0
+networkx
+laspy[lazrs]>=2.4
+rasterio
+matplotlib

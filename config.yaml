@@ -1,0 +1,30 @@
+# Tronçon à générer
+name: route-napoleon-stvallier-escragnolles
+
+# Points de départ / arrivée (WGS84). Ils sont "aimantés" au nœud OSM le plus proche
+# de la route, donc pas besoin d'être précis : clique sur la route dans
+# Google Maps / Géoportail pour les affiner si besoin.
+start: {lat: 43.6981, lon: 6.8486}   # Saint-Vallier-de-Thiey
+end:   {lat: 43.7312, lon: 6.7784}   # Escragnolles (sur la D6085, au nord du village)
+
+# Dans les Alpes-Maritimes, la Route Napoléon (ex-N85) s'appelle D 6085 dans OSM.
+osm_ref_regex: "^(D ?6085|N ?85)$"
+
+# Demi-largeur du couloir autour de l'axe de la route où l'on garde le LiDAR (m).
+# Large exprès : accotements, fossés, talus utiles pour la piste.
+corridor_m: 40
+
+# Marge autour de la route pour le terrain (MNT) et les orthophotos (m).
+terrain_margin_m: 300
+
+# Classes LiDAR HD gardées : 2 = sol, 17 = tablier de pont
+lidar_classes: [2, 17]
+
+# Les dalles LAZ brutes font 0,5 à 2 Go chacune. false = on les supprime
+# juste après la découpe (le pic disque reste ~1 dalle).
+keep_raw_laz: false
+
+ortho_layer: HR.ORTHOIMAGERY.ORTHOPHOTOS
+ortho_res_m: 0.2
+
+data_dir: data
