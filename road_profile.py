@@ -156,10 +156,12 @@ def main():
     # sideways or rough: embankment, ditch or wall instead of tarmac.
     suspect = (np.abs(fit["crossfall"]) > 12) | (fit["rms"] > 0.12)
     suspect_smooth = smooth(suspect.astype(float), int(15 / a.step)) > 0.5
-    # Elevations there are not the road's: interpolate across those stretches
-    zf = fill_gaps(s, np.where(suspect_smooth, np.nan, fit["z"]))
+    # Elevations there are not the road's: interpolate across those stretches,
+    # and across isolated bad stations too (few points, culvert, data hole)
+    bad = suspect | suspect_smooth
+    zf = fill_gaps(s, np.where(bad, np.nan, fit["z"]))
     grade = np.gradient(smooth(zf, int(10 / a.step)), a.step) * 100
-    cross = fill_gaps(s, np.where(suspect_smooth, np.nan, fit["crossfall"]))
+    cross = fill_gaps(s, np.where(bad, np.nan, fit["crossfall"]))
 
     # DTM along the same stations, for comparison
     z_dtm = None
@@ -199,6 +201,7 @@ def main():
         "surface_rms_median_cm": round(100 * float(np.nanmedian(fit["rms"])), 1),
         "bridges": len(bridges),
         "axis_suspect_m": int(sum(b0 - a0 + a.step for a0, b0 in suspects)),
+        "isolated_bad_stations": int((suspect & ~suspect_smooth).sum()),
     }
     if z_dtm is not None:
         ok = np.isfinite(z_dtm) & np.isfinite(fit["z"]) & ~fit["bridge"]
