@@ -95,9 +95,9 @@ def download(url, dest):
         for chunk in r.iter_content(1 << 20):
             f.write(chunk)
             done += len(chunk)
-            if total:
+            if total > 5e6:  # progress only for big files
                 print(f"\r    {done / 1e6:7.0f} / {total / 1e6:.0f} MB", end="", flush=True)
-    if total:
+    if total > 5e6:
         print()
     tmp.replace(dest)
     return True
