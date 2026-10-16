@@ -9,7 +9,7 @@ then, with Blender (no UI needed):
     blender --factory-startup -b -P blender_export.py -- data/<name>/track_build
 
 Geometry, all in metres:
-  - road: ribbon of `road_width_m` built from road_profile.csv (LiDAR elevation
+  - road: ribbon (width per segment from BD TOPO) built from road_profile.csv (LiDAR elevation
     and crossfall), physical surface ROAD
   - verges: strips from the road edge down/up to the DTM, surface GRASS
   - terrain: DTM grid around the road, textured with the IGN orthophotos
@@ -38,7 +38,10 @@ AC_MAX_VERTS = 60_000  # KN5 meshes use 16-bit indices (65 535), keep a margin
 DEFAULTS = {
     "id": "realroad_track",
     "title": "realroad track",
-    "road_width_m": 6.5,
+    "road_width_m": "auto",      # number, or "auto" = BD TOPO width per segment
+    "default_width_m": 7.0,      # used where BD TOPO has no width
+    "min_width_m": 4.0,
+    "width_field": "largeur_de_chaussee",
     "road_cross_vertices": 7,
     "verge_m": 2.5,
     "terrain_half_width_m": 120.0,
@@ -203,21 +206,80 @@ def smooth_2d(a, r):
     return a
 
 
+# ------------------------------------------------------------------- widths
+def road_widths(s, x, y, cfg, p):
+    """Carriageway width at every station. "auto": from the IGN BD TOPO
+    `largeur_de_chaussee` of the nearest segment carrying the road number,
+    with smooth transitions between segments."""
+    if p["road_width_m"] != "auto":
+        return np.full(len(s), float(p["road_width_m"]))
+    import re
+
+    raw = cfg["_dir"] / "route_ign_raw.json"
+    if raw.exists():
+        feats = json.loads(raw.read_text(encoding="utf-8"))
+    else:
+        from shapely.geometry import box
+
+        from fetch import wfs_features
+
+        print("  fetching BD TOPO road segments for the widths…")
+        area = box(x.min(), y.min(), x.max(), y.max()).buffer(500)
+        feats = wfs_features(cfg.get("ign_road_layer", "BDTOPO_V3:troncon_de_route"), area)
+        raw.write_text(json.dumps(feats), encoding="utf-8")
+    from fetch import _to_l93_if_needed
+    from shapely.geometry import shape
+
+    rx = re.compile(cfg["osm_ref_regex"])
+    pts, wid = [], []
+    for f in feats:
+        props = f.get("properties") or {}
+        w = props.get(p["width_field"])
+        if not isinstance(w, (int, float)) or w <= 0:
+            continue
+        if not any(isinstance(v, str) and rx.match(v.strip()) for v in props.values()):
+            continue
+        g = _to_l93_if_needed(shape(f["geometry"]))
+        for part in (g.geoms if g.geom_type == "MultiLineString" else [g]):
+            n = max(2, int(part.length / 2) + 1)  # a point every ~2 m
+            for v in np.linspace(0, part.length, n):
+                q = part.interpolate(v)
+                pts.append((q.x, q.y))
+                wid.append(float(w))
+    w = np.full(len(s), np.nan)
+    if pts:
+        dist, k = cKDTree(np.array(pts)).query(np.column_stack([x, y]), distance_upper_bound=20)
+        ok = np.isfinite(dist)
+        w[ok] = np.array(wid)[k[ok]]
+    known = np.isfinite(w).mean()
+    w = np.where(np.isfinite(w), w, p["default_width_m"])
+    step = float(np.median(np.diff(s)))
+    w = median_filter(w, size=int(40 / step) | 1, mode="nearest")   # ignore tiny segments
+    w = gaussian_filter1d(w, 10 / step, mode="nearest")             # ~30 m transitions
+    # BD TOPO one-way roundabout legs are 3 m: too narrow to drive, the real
+    # ones have extra width in the curve
+    w = np.clip(w, p["min_width_m"], 14.0)
+    vals, counts = np.unique(np.round(w), return_counts=True)
+    print(f"  width from BD TOPO on {100 * known:.0f} % of the road: "
+          + ", ".join(f"{v:.0f} m ({100 * c / len(w):.0f} %)" for v, c in zip(vals, counts)))
+    return w
+
+
 # ---------------------------------------------------------------- geometry
-def build_road(s, x, y, z, cf_pct, p):
+def build_road(s, x, y, z, cf_pct, widths, p):
     step = float(np.median(np.diff(s)))
     tx, ty, nx, ny = frames(x, y, step)
     zs, c = smooth_profile(s, z, cf_pct, p)
-    half = p["road_width_m"] / 2
+    half = widths / 2
     # columns go from right (t = -half) to left (t = +half)
-    t = np.linspace(-half, half, p["road_cross_vertices"])
-    X = x[:, None] + t[None, :] * nx[:, None]
-    Y = y[:, None] + t[None, :] * ny[:, None]
-    Z = zs[:, None] + c[:, None] * t[None, :]
-    U = np.broadcast_to(np.linspace(0, 1, len(t)), X.shape)
+    t = np.linspace(-1, 1, p["road_cross_vertices"])[None, :] * half[:, None]
+    X = x[:, None] + t * nx[:, None]
+    Y = y[:, None] + t * ny[:, None]
+    Z = zs[:, None] + c[:, None] * t
+    U = np.broadcast_to(np.linspace(0, 1, t.shape[1]), X.shape)
     V = np.broadcast_to((s / p["texture_repeat_m"])[:, None], X.shape)
     edges = {"right": (X[:, 0], Y[:, 0], Z[:, 0]), "left": (X[:, -1], Y[:, -1], Z[:, -1])}
-    frame = {"tx": tx, "ty": ty, "nx": nx, "ny": ny, "z": zs, "c": c}
+    frame = {"tx": tx, "ty": ty, "nx": nx, "ny": ny, "z": zs, "c": c, "half": half}
     return (X, Y, Z, U, V), edges, frame
 
 
@@ -252,8 +314,6 @@ def build_terrain(st_x, st_y, frame, dtm, ortho_tiles, p):
     of the road; vertices under the road/verges pushed below the road."""
     tree = cKDTree(np.column_stack([st_x, st_y]))
     g = p["terrain_grid_m"]
-    half = p["road_width_m"] / 2
-    inner = half + p["verge_m"]
     meshes = []
     for tile in ortho_tiles:
         minx, miny, maxx, maxy = tile["bounds"]
@@ -270,8 +330,9 @@ def build_terrain(st_x, st_y, frame, dtm, ortho_tiles, p):
         z[near] = dtm.sample(gx[near], gy[near])
         # lateral offset to the axis → road height there, push terrain under it
         tt = (gx - st_x[k]) * frame["nx"][k] + (gy - st_y[k]) * frame["ny"][k]
+        half = frame["half"][k]
         z_road = frame["z"][k] + frame["c"][k] * np.clip(tt, -half, half)
-        under = near & (dist <= inner - 0.1)
+        under = near & (dist <= half + p["verge_m"] - 0.1)
         z[under] = np.minimum(np.nan_to_num(z[under], nan=z_road[under]), z_road[under]) - 0.5
         keep = near & np.isfinite(z)
         n_rows, n_cols = GX.shape
@@ -309,25 +370,27 @@ def ortho_tile_list(ortho_dir):
 def dummies(s, x, y, frame, p):
     """AC empties. Forward = direction of travel, cars drive on the right."""
     L = s[-1]
-    half = p["road_width_m"] / 2
+
+    def k_at(sv):
+        return int(np.clip(np.searchsorted(s, sv), 0, len(s) - 1))
 
     def at(sv, t, name):
-        k = int(np.clip(np.searchsorted(s, sv), 0, len(s) - 1))
+        k = k_at(sv)
         px = x[k] + t * frame["nx"][k]
         py = y[k] + t * frame["ny"][k]
         pz = frame["z"][k] + frame["c"][k] * t + 1.0  # 1-2 m above the road (AC convention)
         return {"name": name, "pos": [px, py, pz], "fwd": [float(frame["tx"][k]), float(frame["ty"][k]), 0.0]}
 
-    lane = -half / 2  # centre of the right-hand lane
     s0 = p["start_offset_m"]
+    h = lambda sv: float(frame["half"][k_at(sv)])
     return [
-        at(s0, lane, "AC_START_0"),
-        at(s0, lane, "AC_HOTLAP_START_0"),
-        at(s0 + 10, lane, "AC_PIT_0"),
-        at(s0 + 20, -half - 0.5, "AC_AB_START_R"),
-        at(s0 + 20, half + 0.5, "AC_AB_START_L"),
-        at(L - 20, -half - 0.5, "AC_AB_FINISH_R"),
-        at(L - 20, half + 0.5, "AC_AB_FINISH_L"),
+        at(s0, -h(s0) / 2, "AC_START_0"),          # centre of the right-hand lane
+        at(s0, -h(s0) / 2, "AC_HOTLAP_START_0"),
+        at(s0 + 10, -h(s0 + 10) / 2, "AC_PIT_0"),
+        at(s0 + 20, -h(s0 + 20) - 0.5, "AC_AB_START_R"),
+        at(s0 + 20, h(s0 + 20) + 0.5, "AC_AB_START_L"),
+        at(L - 20, -h(L - 20) - 0.5, "AC_AB_FINISH_R"),
+        at(L - 20, h(L - 20) + 0.5, "AC_AB_FINISH_L"),
     ]
 
 
@@ -367,7 +430,8 @@ def main():
     s, x, y, z, cf = load_profile(prof)
     dtm = FastDTM(mnt)
     print(f"Road: {s[-1] / 1000:.2f} km, {len(s)} stations")
-    (X, Y, Z, U, V), edges, frame = build_road(s, x, y, z, cf, p)
+    widths = road_widths(s, x, y, cfg, p)
+    (X, Y, Z, U, V), edges, frame = build_road(s, x, y, z, cf, widths, p)
     verges = build_verges(x, y, edges, frame, dtm, p)
     print("Terrain…")
     terr = build_terrain(x, y, frame, dtm, ortho, p)
@@ -421,7 +485,7 @@ def main():
         shutil.copy(tile["file"], tex / tile["file"].name)
         add(phys_name("GRASS", f"terrain_{mname[6:]}"), mname, verts, faces, uvs, "GRASS")
 
-    asphalt_texture(tex / "asphalt.png", p["road_width_m"], p["texture_repeat_m"])
+    asphalt_texture(tex / "asphalt.png", float(np.median(widths)), p["texture_repeat_m"])
     verge_texture(tex / "verge.png")
 
     dm = dummies(s, x, y, frame, p)
@@ -452,7 +516,7 @@ def main():
         "country": "France",
         "city": p.get("city", ""),
         "length": f"{s[-1]:.0f}",
-        "width": f"{p['road_width_m']:.1f}",
+        "width": f"{np.median(widths):.1f}",
         "pitboxes": "1",
         "run": "A2B",
         "author": p.get("author", ""),

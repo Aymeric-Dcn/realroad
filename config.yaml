@@ -36,7 +36,7 @@ track:
   title: "Route Napoléon — St-Vallier → Escragnolles"
   author: Aymeric Duchene
   city: Saint-Vallier-de-Thiey
-  road_width_m: 6.5          # D6085 here is ~6-7 m wide
+  road_width_m: auto         # "auto" = BD TOPO width per segment (7 m on most of the D6085), or a number
   verge_m: 2.5               # verge strip from the road edge to the terrain
   terrain_half_width_m: 120  # terrain kept on each side of the road
   terrain_grid_m: 2.5        # terrain mesh resolution
