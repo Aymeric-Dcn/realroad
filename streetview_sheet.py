@@ -5,7 +5,8 @@ Street-level comparison: what the road really looks like, every 250 m.
     python fetch.py streetview     # Panoramax 360° photos along the road
     python streetview_sheet.py     → data/<name>/streetview/front/*.jpg, streetview_sheet.jpg
 
-Each 360° photo (equirectangular) is turned into the view a driver has,
+Each 360° photo (equirectangular, centre column = direction of travel of the
+camera car, view:azimuth) is turned into the view a driver has,
 looking along the road (90° field of view, direction of travel of the track),
 so it can be compared with the same place in the game. The sheet puts four
 views per kilometre, labelled with the distance from the start.
@@ -22,7 +23,7 @@ from PIL import Image, ImageDraw
 from fetch import load_cfg
 
 
-def front_view(pano, yaw_deg, hfov_deg=90.0, size=(960, 540), pitch_deg=-4.0):
+def front_view(pano, yaw_deg, hfov_deg=90.0, size=(960, 420), pitch_deg=2.0):
     """Perspective view out of an equirectangular panorama. yaw_deg is measured
     from the centre column of the panorama, positive to the right."""
     W, H = pano.size
@@ -87,13 +88,13 @@ def main():
             yaw = (road_heading(p["s_m"], prof) - az + 540) % 360 - 180
             with Image.open(folder / p["file"]) as pano:
                 if pano.size[0] < 2 * pano.size[1] * 0.9:   # not a 360° picture: use as is
-                    view = pano.convert("RGB").resize((960, 540))
+                    view = pano.convert("RGB").resize((960, 420))
                 else:
                     view = front_view(pano, yaw)
             view.save(out, quality=88)
         tiles.append((p["s_m"], out, (p.get("datetime") or "")[:10]))
     # contact sheet: 4 views per row
-    cw, ch, cols = 480, 270, 4
+    cw, ch, cols = 480, 210, 4
     rows = (len(tiles) + cols - 1) // cols
     sheet = Image.new("RGB", (cols * cw, rows * (ch + 22)), (20, 20, 20))
     dr = ImageDraw.Draw(sheet)
