@@ -38,7 +38,7 @@ AC_MAX_VERTS = 60_000  # KN5 meshes use 16-bit indices (65 535), keep a margin
 DEFAULTS = {
     "id": "realroad_track",
     "title": "realroad track",
-    "road_width_m": "auto",      # number, or "auto" = BD TOPO width per segment
+    "road_width_m": "auto",      # "auto" = LiDAR edges (road_edges.py) else BD TOPO, "bdtopo", or a number
     "default_width_m": 7.0,      # used where BD TOPO has no width
     "min_width_m": 4.0,
     "width_field": "largeur_de_chaussee",
@@ -265,21 +265,59 @@ def road_widths(s, x, y, cfg, p):
     return w
 
 
+def road_extent(s, x, y, cfg, p):
+    """Right (negative) and left (positive) carriageway edge offsets from the
+    axis at every station. "auto": measured LiDAR edges (road_edges.csv) where
+    available, BD TOPO width centred on the measured road centre elsewhere."""
+    mode = p["road_width_m"]
+    if mode not in ("auto", "bdtopo"):
+        w = float(mode)
+        return np.full(len(s), -w / 2), np.full(len(s), w / 2)
+    w_bd = road_widths(s, x, y, cfg, {**p, "road_width_m": "auto"})
+    edges = cfg["_dir"] / "road_edges.csv"
+    if mode == "bdtopo" or not edges.exists():
+        if mode == "auto":
+            print("  (no road_edges.csv: run `python road_edges.py` to use the measured width)")
+        return -w_bd / 2, w_bd / 2
+    e = np.genfromtxt(edges, delimiter=",", names=True)
+    if len(e) != len(s):
+        raise SystemExit("road_edges.csv is out of date: run `python road_edges.py` again.")
+    step = float(np.median(np.diff(s)))
+    measured = gaussian_filter1d(e["measured"].astype(float), 15 / step, mode="nearest") > 0.5
+    centre = np.where(measured, e["centre_offset_m"], np.nan)
+    ok = np.isfinite(centre)
+    centre = np.interp(s, s[ok], centre[ok]) if ok.sum() > 1 else np.zeros(len(s))
+    right = np.where(measured, e["right_m"], centre - w_bd / 2)
+    left = np.where(measured, e["left_m"], centre + w_bd / 2)
+    right = gaussian_filter1d(right, 5 / step, mode="nearest")  # soften the joins
+    left = gaussian_filter1d(left, 5 / step, mode="nearest")
+    width = left - right
+    lo = p["min_width_m"]
+    if (width < lo).any():  # keep it drivable, around the same centre
+        c_ = (left + right) / 2
+        width = np.maximum(width, lo)
+        right, left = c_ - width / 2, c_ + width / 2
+    print(f"  width from LiDAR edges on {100 * measured.mean():.0f} % of the road "
+          f"(BD TOPO elsewhere): median {np.median(width):.2f} m, "
+          f"5-95 % {np.percentile(width, 5):.2f}-{np.percentile(width, 95):.2f} m, "
+          f"road centre up to {np.percentile(np.abs((left + right) / 2), 95):.2f} m off the OSM axis")
+    return right, left
+
+
 # ---------------------------------------------------------------- geometry
-def build_road(s, x, y, z, cf_pct, widths, p):
+def build_road(s, x, y, z, cf_pct, right, left, p):
     step = float(np.median(np.diff(s)))
     tx, ty, nx, ny = frames(x, y, step)
     zs, c = smooth_profile(s, z, cf_pct, p)
-    half = widths / 2
-    # columns go from right (t = -half) to left (t = +half)
-    t = np.linspace(-1, 1, p["road_cross_vertices"])[None, :] * half[:, None]
+    # columns go from the right edge to the left edge
+    t = right[:, None] + (left - right)[:, None] * np.linspace(0, 1, p["road_cross_vertices"])[None, :]
     X = x[:, None] + t * nx[:, None]
     Y = y[:, None] + t * ny[:, None]
     Z = zs[:, None] + c[:, None] * t
     U = np.broadcast_to(np.linspace(0, 1, t.shape[1]), X.shape)
     V = np.broadcast_to((s / p["texture_repeat_m"])[:, None], X.shape)
     edges = {"right": (X[:, 0], Y[:, 0], Z[:, 0]), "left": (X[:, -1], Y[:, -1], Z[:, -1])}
-    frame = {"tx": tx, "ty": ty, "nx": nx, "ny": ny, "z": zs, "c": c, "half": half}
+    frame = {"tx": tx, "ty": ty, "nx": nx, "ny": ny, "z": zs, "c": c, "right": right, "left": left}
     return (X, Y, Z, U, V), edges, frame
 
 
@@ -330,9 +368,10 @@ def build_terrain(st_x, st_y, frame, dtm, ortho_tiles, p):
         z[near] = dtm.sample(gx[near], gy[near])
         # lateral offset to the axis → road height there, push terrain under it
         tt = (gx - st_x[k]) * frame["nx"][k] + (gy - st_y[k]) * frame["ny"][k]
-        half = frame["half"][k]
-        z_road = frame["z"][k] + frame["c"][k] * np.clip(tt, -half, half)
-        under = near & (dist <= half + p["verge_m"] - 0.1)
+        r_, l_ = frame["right"][k], frame["left"][k]
+        z_road = frame["z"][k] + frame["c"][k] * np.clip(tt, r_, l_)
+        v_ = p["verge_m"] - 0.1
+        under = near & (tt >= r_ - v_) & (tt <= l_ + v_) & (dist <= np.maximum(-r_, l_) + v_)
         z[under] = np.minimum(np.nan_to_num(z[under], nan=z_road[under]), z_road[under]) - 0.5
         keep = near & np.isfinite(z)
         n_rows, n_cols = GX.shape
@@ -382,15 +421,17 @@ def dummies(s, x, y, frame, p):
         return {"name": name, "pos": [px, py, pz], "fwd": [float(frame["tx"][k]), float(frame["ty"][k]), 0.0]}
 
     s0 = p["start_offset_m"]
-    h = lambda sv: float(frame["half"][k_at(sv)])
+    r = lambda sv: float(frame["right"][k_at(sv)])
+    l = lambda sv: float(frame["left"][k_at(sv)])
+    lane = lambda sv: (3 * r(sv) + l(sv)) / 4  # centre of the right-hand lane
     return [
-        at(s0, -h(s0) / 2, "AC_START_0"),          # centre of the right-hand lane
-        at(s0, -h(s0) / 2, "AC_HOTLAP_START_0"),
-        at(s0 + 10, -h(s0 + 10) / 2, "AC_PIT_0"),
-        at(s0 + 20, -h(s0 + 20) - 0.5, "AC_AB_START_R"),
-        at(s0 + 20, h(s0 + 20) + 0.5, "AC_AB_START_L"),
-        at(L - 20, -h(L - 20) - 0.5, "AC_AB_FINISH_R"),
-        at(L - 20, h(L - 20) + 0.5, "AC_AB_FINISH_L"),
+        at(s0, lane(s0), "AC_START_0"),
+        at(s0, lane(s0), "AC_HOTLAP_START_0"),
+        at(s0 + 10, lane(s0 + 10), "AC_PIT_0"),
+        at(s0 + 20, r(s0 + 20) - 0.5, "AC_AB_START_R"),
+        at(s0 + 20, l(s0 + 20) + 0.5, "AC_AB_START_L"),
+        at(L - 20, r(L - 20) - 0.5, "AC_AB_FINISH_R"),
+        at(L - 20, l(L - 20) + 0.5, "AC_AB_FINISH_L"),
     ]
 
 
@@ -430,8 +471,9 @@ def main():
     s, x, y, z, cf = load_profile(prof)
     dtm = FastDTM(mnt)
     print(f"Road: {s[-1] / 1000:.2f} km, {len(s)} stations")
-    widths = road_widths(s, x, y, cfg, p)
-    (X, Y, Z, U, V), edges, frame = build_road(s, x, y, z, cf, widths, p)
+    right, left = road_extent(s, x, y, cfg, p)
+    widths = left - right
+    (X, Y, Z, U, V), edges, frame = build_road(s, x, y, z, cf, right, left, p)
     verges = build_verges(x, y, edges, frame, dtm, p)
     print("Terrain…")
     terr = build_terrain(x, y, frame, dtm, ortho, p)

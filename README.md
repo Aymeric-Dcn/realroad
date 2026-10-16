@@ -44,6 +44,7 @@ python preview.py        # profil, pentes, virages, ponts → preview.png
 python fetch.py ortho    # photos aériennes 20 cm
 python fetch.py lidar    # nuage de points du couloir (~10 min, ~120 Mo gardés)
 python road_profile.py   # vrai profil de la chaussée : altitude, dévers, ponts
+python road_edges.py     # vrais bords de la chaussée : largeur et centre réels
 python build_track.py    # géométrie de la piste (route, accotements, terrain, départs AC)
 & "C:\Program Files\Blender Foundation\Blender 4.2\blender.exe" --factory-startup -b -P blender_export.py -- data\<nom>\track_build
 ```
@@ -110,6 +111,7 @@ python preview.py        # profile, grades, curves, bridges → preview.png
 python fetch.py ortho    # 20 cm aerial imagery
 python fetch.py lidar    # corridor point cloud (~10 min, ~120 MB kept)
 python road_profile.py   # real road surface: elevation, crossfall, bridges
+python road_edges.py     # real carriageway edges: true width and centre
 python build_track.py    # track geometry (road, verges, terrain, AC spawn points)
 & "C:\Program Files\Blender Foundation\Blender 4.2\blender.exe" --factory-startup -b -P blender_export.py -- data\<name>\track_build
 ```

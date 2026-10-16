@@ -36,6 +36,7 @@ python fetch.py mnt         # relief
 python fetch.py ortho       # photos aériennes (relancer si interrompu, ça reprend)
 python fetch.py lidar       # nuage de points du couloir
 python road_profile.py      # altitude, dévers, ponts → road_profile.png à vérifier
+python road_edges.py        # bords réels de la chaussée → road_edges.png à vérifier
 ```
 
 ### 3. Géométrie et FBX (~2 min)
@@ -112,6 +113,7 @@ python fetch.py mnt         # terrain
 python fetch.py ortho       # aerial imagery (run again if interrupted, it resumes)
 python fetch.py lidar       # corridor point cloud
 python road_profile.py      # elevation, crossfall, bridges → check road_profile.png
+python road_edges.py        # real carriageway edges → check road_edges.png
 ```
 
 ### 3. Geometry and FBX (~2 min)
