@@ -318,6 +318,15 @@ def main():
     ortho = ortho_tile_list(d / "ortho")
     if not ortho:
         raise SystemExit("No orthophotos: run `python fetch.py ortho` first.")
+    _, px_, py_, _, _ = load_profile(prof)
+    covered = np.zeros(len(px_), bool)
+    for t in ortho:
+        x0_, y0_, x1_, y1_ = t["bounds"]
+        covered |= (px_ >= x0_) & (px_ < x1_) & (py_ >= y0_) & (py_ < y1_)
+    if covered.mean() < 0.999:
+        raise SystemExit(f"Orthophotos only cover {100 * covered.mean():.0f} % of the road "
+                         f"({len(ortho)} images): the download was interrupted. Run "
+                         "`python fetch.py ortho` again (it resumes where it stopped).")
 
     out = d / "track_build"
     tex = out / "texture"
