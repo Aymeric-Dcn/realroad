@@ -16,7 +16,7 @@ Geometry, all in metres:
     physical surface ROAD
   - markings: the real centre/edge lines from road_markings.py, thin strips
     2 cm above the asphalt (visual only); generic ones in the texture otherwise
-  - verges: strips from the road edge down/up to the DTM, surface GRASS
+  - verges: orthophoto strips blending from the road edge into the DTM, surface GRASS
   - terrain: DTM grid around the road, textured with the IGN orthophotos
     (one mesh per 400 m ortho tile), surface GRASS; pushed under the road
   - AC dummies: start, pit, hotlap start and A-to-B timing gates
@@ -48,7 +48,9 @@ DEFAULTS = {
     "min_width_m": 4.0,
     "width_field": "largeur_de_chaussee",
     "road_cross_vertices": 7,
-    "verge_m": 2.5,
+    "verge_m": 2.5,              # blend from the road edge to the terrain over this width
+    "verge_outer_m": 7.0,        # the verge strip continues (just under the terrain) to here
+    "verge_texture": "ortho",    # "ortho" = the orthophoto (blends with the terrain), "procedural"
     "terrain_half_width_m": 120.0,
     "terrain_grid_m": 2.5,
     "far_terrain_m": 290.0,      # coarse terrain ring out to this distance (0 = off); data reach ~300 m
@@ -403,29 +405,60 @@ def chunk_rows(n_rows, rows_per_chunk):
 
 
 def build_verges(x, y, edges, frame, dtm, p):
-    """Right and left strips: road edge → DTM at verge_m further out."""
+    """Right and left strips from the road edge to the terrain.
+
+    Columns at 0, 0.4 m (shoulder, 3 cm under the edge), then a smooth blend
+    to the DTM at verge_m, then on to verge_outer_m 20 cm under the DTM: the
+    terrain is cut out around the road (build_terrain) and overlaps the outer
+    part, so there is neither a gap nor triangles poking through."""
+    blend, outer = p["verge_m"], p["verge_outer_m"]
+    offs = np.array([0.0, 0.4, 0.4 + (blend - 0.4) / 3, 0.4 + 2 * (blend - 0.4) / 3, blend,
+                     (blend + outer) / 2, outer])
     out = {}
     for side, sign in (("right", -1), ("left", 1)):
         ex, ey, ez = edges[side]
-        ox = ex + sign * p["verge_m"] * frame["nx"]
-        oy = ey + sign * p["verge_m"] * frame["ny"]
-        oz = dtm.sample(ox, oy)
-        oz = np.where(np.isfinite(oz), oz, ez - 0.3)
-        mx, my = (ex + ox) / 2, (ey + oy) / 2
-        mz = np.minimum((ez + oz) / 2, np.maximum(ez, oz) - 0.05)  # slight ditch shape
-        cols = [(ex, ey, ez), (mx, my, mz), (ox, oy, oz)]
+        cols = []
+        for o in offs:
+            ox = ex + sign * o * frame["nx"]
+            oy = ey + sign * o * frame["ny"]
+            if o == 0:
+                oz = ez
+            elif o <= 0.4 + 1e-9:
+                oz = ez - 0.03
+            else:
+                d_ = dtm.sample(ox, oy)
+                d_ = np.where(np.isfinite(d_), d_, ez - 0.3)
+                if o <= blend + 1e-9:
+                    w = (o - 0.4) / (blend - 0.4)
+                    w = w * w * (3 - 2 * w)                       # smoothstep
+                    oz = (ez - 0.03) * (1 - w) + d_ * w
+                else:
+                    oz = d_ - 0.2
+            cols.append((ox, oy, oz))
         if side == "right":  # keep columns ordered right → left, like the road
             cols = cols[::-1]
-        X = np.column_stack([c_[0] for c_ in cols])
-        Y = np.column_stack([c_[1] for c_ in cols])
-        Z = np.column_stack([c_[2] for c_ in cols])
-        out[side] = (X, Y, Z)
+        out[side] = tuple(np.column_stack([c_[k] for c_ in cols]) for k in range(3))
     return out
+
+
+def tile_runs(px, py, tiles):
+    """Split rows into runs lying in the same ortho tile (by the given point);
+    consecutive runs share their boundary row so the strip stays closed."""
+    idx = np.full(len(px), -1)
+    for i, t in enumerate(tiles):
+        x0, y0, x1, y1 = t["bounds"]
+        idx[(idx < 0) & (px >= x0) & (px < x1) & (py >= y0) & (py < y1)] = i
+    runs_, a = [], 0
+    for k in range(1, len(px) + 1):
+        if k == len(px) or idx[k] != idx[a]:
+            runs_.append((a, min(k, len(px) - 1), idx[a]))
+            a = k
+    return runs_
 
 
 def build_terrain(st_x, st_y, frame, dtm, ortho_tiles, p):
     """One grid mesh per ortho tile; vertices kept within terrain_half_width_m
-    of the road; vertices under the road/verges pushed below the road."""
+    of the road; cut out under the road and the verge blend."""
     tree = cKDTree(np.column_stack([st_x, st_y]))
     g = p["terrain_grid_m"]
     meshes = []
@@ -446,9 +479,14 @@ def build_terrain(st_x, st_y, frame, dtm, ortho_tiles, p):
         tt = (gx - st_x[k]) * frame["nx"][k] + (gy - st_y[k]) * frame["ny"][k]
         r_, l_ = frame["right"][k], frame["left"][k]
         z_road = frame["z"][k] + frame["c"][k] * np.clip(tt, r_, l_)
-        v_ = p["verge_m"] - 0.1
+        # cut the terrain out under the road and the verge blend: the verge
+        # strip (down to verge_outer_m, just under the DTM) fills the hole
+        v_ = p["verge_m"] if p["verge_outer_m"] >= p["verge_m"] + 1.5 * g else p["verge_m"] - 0.1
         under = near & (tt >= r_ - v_) & (tt <= l_ + v_) & (dist <= np.maximum(-r_, l_) + v_)
-        z[under] = np.minimum(np.nan_to_num(z[under], nan=z_road[under]), z_road[under]) - 0.5
+        if p["verge_outer_m"] >= p["verge_m"] + 1.5 * g:
+            z[under] = np.nan
+        else:  # old behaviour: push it under the road
+            z[under] = np.minimum(np.nan_to_num(z[under], nan=z_road[under]), z_road[under]) - 0.5
         keep = near & np.isfinite(z)
         n_rows, n_cols = GX.shape
         faces = grid_faces(n_rows, n_cols)
@@ -661,6 +699,17 @@ def main():
         phys[surface] += 1
         return f"{phys[surface]}{surface}_{tag}"
 
+    materials = {"road": "asphalt.png"}
+    if p["verge_texture"] != "ortho":
+        materials["verge"] = "verge.png"
+
+    def use_tile(tile):
+        mname = f"ortho_{int(tile['bounds'][0])}_{int(tile['bounds'][1])}"
+        if mname not in materials:
+            materials[mname] = tile["file"].name
+            shutil.copy(tile["file"], tex / tile["file"].name)
+        return mname
+
     n_cols = X.shape[1]
     rows_per_chunk = int(p["road_chunk_m"] / np.median(np.diff(s)))
     for ci, (r0, r1) in enumerate(chunk_rows(X.shape[0], rows_per_chunk)):
@@ -670,13 +719,28 @@ def main():
         add(phys_name("ROAD", f"{ci:03d}"), "road", verts, grid_faces(r1 - r0 + 1, n_cols), uvs, "ROAD")
         for side in ("right", "left"):
             VX, VY, VZ = (arr[sl] for arr in verges[side])
-            vv = np.column_stack([VX.ravel(), VY.ravel(), VZ.ravel()])
-            vuv = np.column_stack([np.tile(np.linspace(0, 1, VX.shape[1]), VX.shape[0]),
-                                   np.repeat(s[sl] / 4.0, VX.shape[1])])
-            add(phys_name("GRASS", f"verge_{side[0]}{ci:03d}"), "verge", vv,
-                grid_faces(r1 - r0 + 1, VX.shape[1]), vuv, "GRASS")
+            if p["verge_texture"] == "ortho":
+                # orthophoto, mapped like the terrain: the verge blends into it
+                mid = VX.shape[1] // 2
+                for ri, (a_, b_, ti) in enumerate(tile_runs(VX[:, mid], VY[:, mid], ortho)):
+                    if b_ <= a_ or ti < 0:
+                        continue
+                    t_ = ortho[ti]
+                    bx0, by0, bx1, by1 = t_["bounds"]
+                    gx_, gy_, gz_ = VX[a_:b_ + 1], VY[a_:b_ + 1], VZ[a_:b_ + 1]
+                    vv = np.column_stack([gx_.ravel(), gy_.ravel(), gz_.ravel()])
+                    vuv = np.column_stack([np.clip((gx_.ravel() - bx0) / (bx1 - bx0), 0, 1),
+                                           np.clip((gy_.ravel() - by0) / (by1 - by0), 0, 1)])
+                    mname = use_tile(t_)
+                    add(phys_name("GRASS", f"verge_{side[0]}{ci:03d}_{ri}"), mname, vv,
+                        grid_faces(b_ - a_ + 1, VX.shape[1]), vuv, "GRASS")
+            else:
+                vv = np.column_stack([VX.ravel(), VY.ravel(), VZ.ravel()])
+                vuv = np.column_stack([np.tile(np.linspace(0, 1, VX.shape[1]), VX.shape[0]),
+                                       np.repeat(s[sl] / 4.0, VX.shape[1])])
+                add(phys_name("GRASS", f"verge_{side[0]}{ci:03d}"), "verge", vv,
+                    grid_faces(r1 - r0 + 1, VX.shape[1]), vuv, "GRASS")
 
-    materials = {"road": "asphalt.png", "verge": "verge.png"}
     painted = load_markings(cfg, s, p)
     if painted is not None:
         marks = build_markings(x, y, frame, painted, p)
@@ -709,7 +773,8 @@ def main():
 
     asphalt_texture(tex / "asphalt.png", float(np.median(widths)), p["texture_repeat_m"],
                     paint_lines=painted is None and p["markings"] != "none")
-    verge_texture(tex / "verge.png")
+    if "verge" in materials:
+        verge_texture(tex / "verge.png")
 
     dm = dummies(s, x, y, frame, p)
     for dd in dm:

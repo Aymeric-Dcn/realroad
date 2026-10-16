@@ -101,8 +101,8 @@ Les données vont dans `data/<nom-du-tronçon>/` (ignoré par Git).
 3. ✅ Profil en long et en travers depuis le LiDAR (altitude, dévers, ponts)
 4. ✅ Maillage route + terrain, export FBX via Blender
 5. ✅ ksEditor → piste Assetto Corsa roulable (premier essai le 16/10/2026) : route reconnaissable, bosses lissées, largeur réelle mesurée
-6. ✅ kn5 écrit directement (plus de ksEditor), AI line, caméras, minimap, miniatures ; marquages réels ; terrain étendu (v0.2, à tester en jeu)
-7. 🔜 Végétation (arbres depuis le LiDAR), accotements goudronnés ; relief lointain (à tester)
+6. ✅ kn5 écrit directement (plus de ksEditor), AI line, caméras, minimap, miniatures ; marquages réels ; terrain étendu et relief lointain (v0.2)
+7. 🔜 Végétation (arbres depuis le LiDAR), accotements goudronnés
 8. Bâtiments, panneaux, glissières
 9. Contrôle qualité automatique : règles de génie civil (pente, dévers ↔ courbure), cohérence entre sources, score de confiance par mètre, reconstruction droites/clothoïdes/paraboles, télémétrie d'une IA qui roule sur la piste
 
@@ -181,8 +181,8 @@ Downloads resume where they stopped. Data goes to `data/<section-name>/`
 3. ✅ Longitudinal and cross profiles from LiDAR (elevation, crossfall, bridges)
 4. ✅ Road + terrain mesh, FBX export through Blender
 5. ✅ ksEditor → drivable Assetto Corsa track (first drive on 2026-10-16): recognisable road, bumps smoothed, real width measured
-6. ✅ kn5 written directly (no more ksEditor), AI line, cameras, minimap, previews; real markings; wider terrain (v0.2, to test in game)
-7. 🔜 Vegetation (trees from the LiDAR), paved shoulders; distant relief (to test)
+6. ✅ kn5 written directly (no more ksEditor), AI line, cameras, minimap, previews; real markings; wider terrain and distant relief (v0.2)
+7. 🔜 Vegetation (trees from the LiDAR), paved shoulders
 8. Buildings, signs, guardrails
 9. Automatic QA: road-design rules (grade, crossfall vs curvature), cross-source consistency, per-metre confidence score, line/clothoid/parabola reconstruction, telemetry from an AI driving the track
 

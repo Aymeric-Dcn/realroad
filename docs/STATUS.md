@@ -31,10 +31,13 @@ a besoin de rasterio). Ensuite les pistes de test peuvent être supprimées.
 À regarder : couleur du terrain et de la route, marquages (scintillement au
 loin ?), minimap, IA (Track Day), caméras de replay.
 
+**Retours du 16/10 au soir** : terrain à 300 m et relief lointain validés en jeu
+(« le décor est super ») ; bord de route jugé laid → refait (photo aérienne,
+raccord progressif au terrain, terrain découpé autour de la route), à tester.
+
 **Limites connues**
 - Sous les arbres et dans la traversée de Saint-Vallier, les bords sont estimés.
 - Les accotements goudronnés au-delà des lignes sont traités comme de l'accotement.
-- Relief lointain (`fetch.py far`) écrit mais pas encore testé : le nom de la couche IGN d'altitude est à confirmer au premier lancement.
 - Pas d'arbres en volume (l'orthophoto seule).
 
 **Prochaines étapes proposées** : végétation depuis le LiDAR (classes 3-5),
@@ -60,10 +63,12 @@ looks right). v0.2, not driven yet:
 
 The wider terrain needs a run on the PC (`python realroad.py --from road_markings --install "…"`).
 
+**Feedback 16/10 evening**: 300 m terrain and distant relief approved in game;
+roadside judged ugly → redone (orthophoto, smooth blend, terrain cut out), to test.
+
 **Known limits**:
 - estimated edges under trees and through Saint-Vallier;
 - paved shoulders beyond the edge lines are treated as verge;
-- distant relief (`fetch.py far`) written but not tested yet;
 - no 3D trees.
 
 **Next**: vegetation from the LiDAR, paved shoulders, automatic QA.
