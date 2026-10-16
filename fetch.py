@@ -5,7 +5,7 @@
     python fetch.py osm      # tracé de la route (OpenStreetMap, sinon BD TOPO IGN)
     python fetch.py mnt      # dalles MNT LiDAR HD (relief, 50 cm)
     python fetch.py ortho    # orthophotos IGN 20 cm autour de la route
-    python fetch.py lidar    # nuages de points LiDAR HD, découpés au couloir de la route
+    python fetch.py lidar    # nuage de points LiDAR HD du couloir (lecture COPC partielle)
     python fetch.py all      # osm + mnt + ortho (le LiDAR, lourd, se lance à part)
 
 Toutes les géométries sont en Lambert-93 (EPSG:2154), en mètres.
@@ -332,29 +332,83 @@ def cmd_mnt(cfg):
 
 
 # -------------------------------------------------------------------- LiDAR
-def crop_laz(src, dst, area, classes):
-    """Garde les points des classes voulues à l'intérieur de `area`. Lecture par
-    blocs pour ne pas charger une dalle de 2 Go en mémoire."""
+def _new_las_header(src_header):
+    """En-tête LAS 1.4 neuf (sans les VLR propres au COPC) mais même format de
+    points, mêmes échelles/décalages."""
+    import laspy
+
+    h = laspy.LasHeader(point_format=src_header.point_format, version="1.4")
+    h.scales = src_header.scales
+    h.offsets = src_header.offsets
+    return h
+
+
+def _filter(pts, area, classes):
+    pts = pts[np.isin(np.asarray(pts.classification), classes)]
+    if len(pts):
+        pts = pts[shapely.contains_xy(area, np.asarray(pts.x), np.asarray(pts.y))]
+    return pts
+
+
+def corridor_cells(area, tile_bounds, cell_m):
+    """Cases carrées (sans recouvrement) de la dalle qui touchent le couloir."""
+    minx, miny, maxx, maxy = tile_bounds
+    cells = []
+    y = miny
+    while y < maxy - 1e-6:
+        x = minx
+        while x < maxx - 1e-6:
+            c = (x, y, min(x + cell_m, maxx), min(y + cell_m, maxy))
+            if box(*c).intersects(area):
+                cells.append(c)
+            x += cell_m
+        y += cell_m
+    return cells
+
+
+def crop_copc_remote(url, dst, area, classes, tile_bounds, cell_m=150):
+    """Lit à distance (requêtes HTTP Range) uniquement les morceaux du nuage COPC
+    qui touchent le couloir : quelques dizaines de Mo au lieu de ~1 Go/dalle."""
+    import laspy
+    from laspy.copc import Bounds
+
+    shapely.prepare(area)
+    cells = corridor_cells(area, tile_bounds, cell_m)
+    kept = 0
+    with laspy.CopcReader.open(url, http_num_threads=8) as rdr:
+        with laspy.open(dst, mode="w", header=_new_las_header(rdr.header)) as w:
+            for k, (x0, y0, x1, y1) in enumerate(cells, 1):
+                pts = rdr.query(Bounds(mins=np.array([x0, y0]), maxs=np.array([x1, y1])))
+                if len(pts):
+                    # bornes inclusives côté COPC : on évite les doublons entre cases
+                    x, y = np.asarray(pts.x), np.asarray(pts.y)
+                    pts = pts[(x >= x0) & (x < x1) & (y >= y0) & (y < y1)]
+                pts = _filter(pts, area, classes)
+                if len(pts):
+                    w.write_points(pts)
+                    kept += len(pts)
+                print(f"\r    case {k}/{len(cells)} — {kept:,} points".replace(",", " "), end="", flush=True)
+    print()
+    return kept
+
+
+def crop_laz_local(src, dst, area, classes):
+    """Variante sans COPC : dalle entière téléchargée puis découpée par blocs."""
     import laspy
 
     shapely.prepare(area)
     kept = 0
     with laspy.open(src) as reader:
-        with laspy.open(dst, mode="w", header=reader.header) as writer:
+        with laspy.open(dst, mode="w", header=_new_las_header(reader.header)) as writer:
             for pts in reader.chunk_iterator(3_000_000):
-                sub = pts[np.isin(np.asarray(pts.classification), classes)]
-                if len(sub) == 0:
-                    continue
-                sub = sub[shapely.contains_xy(area, np.asarray(sub.x), np.asarray(sub.y))]
-                if len(sub):
-                    writer.write_points(sub)
-                    kept += len(sub)
-    if kept == 0:
-        Path(dst).unlink(missing_ok=True)
+                pts = _filter(pts, area, classes)
+                if len(pts):
+                    writer.write_points(pts)
+                    kept += len(pts)
     return kept
 
 
-def cmd_lidar(cfg, yes=False):
+def cmd_lidar(cfg, yes=False, full=False):
     route = load_route(cfg)
     area = corridor_area(cfg, route)
     tiles = lidar_tiles(area, "url_npl")
@@ -363,22 +417,42 @@ def cmd_lidar(cfg, yes=False):
     (cfg["_dir"] / "lidar_tiles.json").write_text(json.dumps(tiles, indent=1), encoding="utf-8")
     crop_dir = cfg["_dir"] / "lidar"
     crop_dir.mkdir(parents=True, exist_ok=True)
-    todo = [t for t in tiles if not (crop_dir / t["name"]).exists()
-            and not (crop_dir / (t["name"] + ".empty")).exists()]
-    print(f"{len(tiles)} dalles LiDAR touchent le couloir, {len(todo)} restent à traiter.")
-    print(f"Ordre de grandeur : ~{len(todo)} Go à télécharger (0,5 à 2 Go par dalle).")
-    if todo and not yes and input("Continuer ? [o/N] ").strip().lower() not in ("o", "oui", "y"):
-        return
+    out_name = lambda t: t["name"].replace(".copc.laz", ".laz")
+    todo = [t for t in tiles if not (crop_dir / out_name(t)).exists()
+            and not (crop_dir / (out_name(t) + ".empty")).exists()]
+    print(f"{len(tiles)} dalles LiDAR touchent le couloir (±{cfg['corridor_m']} m), "
+          f"{len(todo)} restent à traiter.")
+    if full and todo:
+        print(f"Mode dalles entières : ~{len(todo)} Go à télécharger (0,5 à 2 Go par dalle).")
+        if not yes and input("Continuer ? [o/N] ").strip().lower() not in ("o", "oui", "y"):
+            return
+    classes = cfg["lidar_classes"]
     for i, t in enumerate(todo, 1):
-        raw = cfg["_dir"] / "lidar_raw" / t["name"]
+        dst = crop_dir / out_name(t)
+        tmp = dst.with_name(dst.name + ".part.laz")
         print(f"  [{i}/{len(todo)}] {t['name']}")
-        download(t["url"], raw)
-        n = crop_laz(raw, crop_dir / t["name"], area, cfg["lidar_classes"])
-        print(f"    → {n:,} points gardés".replace(",", " "))
+        t0 = time.time()
+        if not full:
+            try:
+                n = crop_copc_remote(t["url"], tmp, area, classes, t["bounds"])
+            except Exception as e:  # serveur sans Range, laspy trop ancien…
+                tmp.unlink(missing_ok=True)
+                sys.exit(f"\n    ! Lecture COPC à distance impossible ({type(e).__name__}: {e})\n"
+                         "    Envoie-moi ce message. En attendant : `python fetch.py lidar --full`\n"
+                         "    télécharge les dalles entières (~1 Go chacune) et marche toujours.")
+        if full:
+            raw = cfg["_dir"] / "lidar_raw" / t["name"]
+            download(t["url"], raw)
+            n = crop_laz_local(raw, tmp, area, classes)
+            if not cfg.get("keep_raw_laz", False):
+                raw.unlink(missing_ok=True)
         if n == 0:
-            (crop_dir / (t["name"] + ".empty")).touch()
-        if not cfg.get("keep_raw_laz", False):
-            raw.unlink(missing_ok=True)
+            tmp.unlink(missing_ok=True)
+            (crop_dir / (out_name(t) + ".empty")).touch()
+        else:
+            tmp.replace(dst)
+        mb = dst.stat().st_size / 1e6 if dst.exists() else 0
+        print(f"    → {n:,} points gardés, {mb:.1f} Mo, {time.time() - t0:.0f} s".replace(",", " "))
 
 
 # ------------------------------------------------------------------- ortho
@@ -438,6 +512,8 @@ def main():
     ap.add_argument("step", choices=["osm", "mnt", "ortho", "lidar", "all"])
     ap.add_argument("-c", "--config", default="config.yaml")
     ap.add_argument("-y", "--yes", action="store_true", help="ne pas demander confirmation")
+    ap.add_argument("--full", action="store_true",
+                    help="lidar : télécharger les dalles entières au lieu de la lecture COPC partielle")
     a = ap.parse_args()
     cfg = load_cfg(a.config)
     if a.step in ("osm", "all"):
@@ -447,7 +523,7 @@ def main():
     if a.step in ("ortho", "all"):
         cmd_ortho(cfg)
     if a.step == "lidar":
-        cmd_lidar(cfg, a.yes)
+        cmd_lidar(cfg, a.yes, a.full)
 
 
 if __name__ == "__main__":

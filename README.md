@@ -1,10 +1,29 @@
-# realroad — routes réelles → Assetto Corsa
+# realroad
 
-Génère automatiquement des routes roulables à partir de données ouvertes
-(IGN LiDAR HD, BD ORTHO, OpenStreetMap). Premier tronçon : Route Napoléon
-(D6085) entre Saint-Vallier-de-Thiey et Escragnolles.
+**🇫🇷 [Français](#-français) · 🇬🇧 [English](#-english)**
 
-## Installation (Windows)
+Routes réelles → pistes de simulation, générées automatiquement à partir de
+données ouvertes. / Real-world roads → driving-sim tracks, generated
+automatically from open data.
+
+Auteur / Author : **Aymeric Duchene**
+
+---
+
+## 🇫🇷 Français
+
+### L'idée
+
+Rouler dans un simulateur (Assetto Corsa) sur les routes qu'on connaît, avec
+leur vraie géométrie : pente, dévers, virages, bosses. Au lieu de modéliser
+chaque route à la main pendant des mois, `realroad` la génère à partir des
+données publiques de l'IGN (LiDAR HD, BD TOPO, orthophotos) et
+d'OpenStreetMap.
+
+Premier tronçon : **Route Napoléon (D6085), Saint-Vallier-de-Thiey →
+Escragnolles** (17,4 km, Pas de la Faye à ~980 m).
+
+### Installation (Windows)
 
 ```powershell
 cd realroad
@@ -13,22 +32,102 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Étape 1 : données
+### Utilisation
+
+Le tronçon se décrit dans `config.yaml` (points de départ/arrivée, numéro de
+route, largeur du couloir…).
 
 ```powershell
-python fetch.py osm      # tracé → data\<nom>\route_wgs84.geojson (à vérifier sur geojson.io)
-python fetch.py mnt      # relief 50 cm
-python preview.py        # profil, pentes, virages → preview.png
+python fetch.py osm      # tracé (OpenStreetMap, sinon BD TOPO IGN)
+python fetch.py mnt      # relief LiDAR HD 50 cm (~16 Mo par km²)
+python preview.py        # profil, pentes, virages, ponts → preview.png
 python fetch.py ortho    # photos aériennes 20 cm
-python fetch.py lidar    # nuage de points, plusieurs Go en transit, découpé au couloir
+python fetch.py lidar    # nuage de points du couloir (lecture COPC partielle)
 ```
 
-Chaque commande peut être relancée : ce qui est déjà téléchargé est sauté.
+Toutes les commandes peuvent être relancées : ce qui est déjà là est sauté.
+Les données vont dans `data/<nom-du-tronçon>/` (ignoré par Git).
 
-## Feuille de route
+### Comment ça marche
 
-1. ✅ Récupération des données
-2. Axe de route précis + échantillonnage LiDAR (pente, dévers, bosses)
-3. Maillage route + terrain dans Blender (script Python)
-4. Export FBX → ksEditor → piste AC (surfaces physiques, AI line, spawns)
-5. Végétation, bâtiments, panneaux
+| Étape | Source | Détail |
+|---|---|---|
+| Tracé | OSM (Overpass) ou BD TOPO | Plus court chemin entre départ et arrivée sur les tronçons portant le numéro de route ; les ronds-points sans numéro sont recousus (≤ 60 m). |
+| Relief | MNT LiDAR HD | Dalles 1 km², GeoTIFF float32 au pas de 50 cm, listées par la couche WFS `IGNF_LIDAR-HD_METADONNEE:metadata`. |
+| Ponts | MNT | Le MNT est le sol nu et plonge sous les ponts : creux étroits repérés et interpolés (aperçu). La vraie altitude viendra des points LiDAR classe 17. |
+| Nuage de points | LiDAR HD COPC | Lecture à distance (HTTP Range) des seules cases de 150 m qui touchent le couloir ; on garde le sol (2) et les tabliers de pont (17). |
+
+### Feuille de route
+
+1. ✅ Tracé, relief, aperçu
+2. 🔄 Nuage de points LiDAR du couloir
+3. Axe précis + profil en long et en travers (pente, dévers, bosses)
+4. Maillage route + terrain dans Blender (script Python)
+5. Export FBX → ksEditor → piste Assetto Corsa (surfaces, AI line, départs)
+6. Végétation, bâtiments, panneaux
+
+---
+
+## 🇬🇧 English
+
+### The idea
+
+Drive the roads you know in a sim (Assetto Corsa) with their real geometry:
+grade, camber, curves, bumps. Instead of hand-modelling each road for months,
+`realroad` generates it from French public data (IGN LiDAR HD, BD TOPO,
+orthophotos) and OpenStreetMap.
+
+First section: **Route Napoléon (D6085), Saint-Vallier-de-Thiey →
+Escragnolles** (17.4 km, Pas de la Faye at ~980 m).
+
+### Install (Windows)
+
+```powershell
+cd realroad
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### Usage
+
+A section is described in `config.yaml` (start/end points, road number,
+corridor width…).
+
+```powershell
+python fetch.py osm      # centreline (OpenStreetMap, IGN BD TOPO fallback)
+python fetch.py mnt      # 50 cm LiDAR HD terrain (~16 MB per km²)
+python preview.py        # profile, grades, curves, bridges → preview.png
+python fetch.py ortho    # 20 cm aerial imagery
+python fetch.py lidar    # corridor point cloud (partial COPC reads)
+```
+
+Every command is resumable: anything already downloaded is skipped. Data goes
+to `data/<section-name>/` (git-ignored).
+
+### How it works
+
+| Step | Source | Notes |
+|---|---|---|
+| Centreline | OSM (Overpass) or BD TOPO | Shortest path between start and end over ways carrying the road number; unnumbered roundabouts are stitched (≤ 60 m). |
+| Terrain | LiDAR HD DTM | 1 km² tiles, float32 GeoTIFF at 50 cm, listed by the WFS layer `IGNF_LIDAR-HD_METADONNEE:metadata`. |
+| Bridges | DTM | The DTM is bare earth and dives under bridges: narrow dips are detected and interpolated (preview). Real deck height will come from class-17 LiDAR points. |
+| Point cloud | LiDAR HD COPC | Remote reads (HTTP Range) of only the 150 m cells touching the corridor; ground (2) and bridge decks (17) are kept. |
+
+### Roadmap
+
+1. ✅ Centreline, terrain, preview
+2. 🔄 Corridor LiDAR point cloud
+3. Precise centreline + longitudinal and cross profiles (grade, camber, bumps)
+4. Road + terrain mesh in Blender (Python script)
+5. FBX export → ksEditor → Assetto Corsa track (surfaces, AI line, spawns)
+6. Vegetation, buildings, signs
+
+---
+
+## Données / Data
+
+- IGN LiDAR HD, BD TOPO, BD ORTHO — © IGN,
+  [Licence Ouverte Etalab 2.0](https://www.etalab.gouv.fr/licence-ouverte-open-licence/)
+- OpenStreetMap — © OpenStreetMap contributors,
+  [ODbL](https://www.openstreetmap.org/copyright)
