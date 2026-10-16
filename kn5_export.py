@@ -44,6 +44,7 @@ MATERIALS = {
 }
 DEFAULTS = {
     "ortho_texture_px": 2048,    # orthophoto tiles are resampled to this (power of two)
+    "ortho_far_texture_px": 1024,  # tiles only used by the far terrain ring
     "max_texture_px": 2048,      # other textures
     "ai_step_m": 1.5,            # spacing of the AI spline points (Kunos tracks: 1.4-1.5 m)
     "ai_lat_accel": 7.0,         # m/s², corner speed hint for the AI
@@ -594,6 +595,7 @@ def main():
 
     # textures (one per material)
     mat_names = list(man["materials"])
+    far_only = set(man.get("far_only_materials", []))
     kn5_path = out / f"{tid}.kn5"
     tmp = kn5_path.with_suffix(".kn5.part")
     with open(tmp, "wb") as f:
@@ -604,7 +606,9 @@ def main():
         for i, m in enumerate(mat_names):
             src = tex_dir / man["materials"][m]
             img = Image.open(src)
-            if m.startswith("ortho_"):
+            if m in far_only:
+                size = (p["ortho_far_texture_px"],) * 2
+            elif m.startswith("ortho_"):
                 size = (p["ortho_texture_px"],) * 2
             else:
                 size = tuple(min(p["max_texture_px"], max(4, 1 << round(math.log2(s)))) for s in img.size)

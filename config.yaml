@@ -40,6 +40,12 @@ track:
   verge_m: 2.5               # verge strip from the road edge to the terrain
   terrain_half_width_m: 120  # terrain kept on each side of the road
   terrain_grid_m: 2.5        # terrain mesh resolution
+  far_terrain_m: 290         # coarse terrain ring out to this distance (0 = off)
+  markings: auto             # auto = real markings (road_markings.py), texture = generic, none
   z_sigma_m: 6               # Gaussian smoothing of the LiDAR elevation (bumps vs detail)
   crossfall_sigma_m: 10      # Gaussian smoothing of the crossfall
   z_despike_m: 0.06          # isolated elevation spikes larger than this are removed
+  # kn5_export.py
+  ortho_texture_px: 2048     # orthophoto texture size in the kn5 (1024 = 4x smaller file)
+  # materials:               # ksPerPixel values per material, e.g.
+  #   terrain: {ksAmbient: 0.45, ksDiffuse: 0.35}

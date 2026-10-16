@@ -51,6 +51,8 @@ DEFAULTS = {
     "verge_m": 2.5,
     "terrain_half_width_m": 120.0,
     "terrain_grid_m": 2.5,
+    "far_terrain_m": 290.0,      # coarse terrain ring out to this distance (0 = off); data reach ~300 m
+    "far_terrain_grid_m": 10.0,
     "z_sigma_m": 6.0,
     "crossfall_sigma_m": 10.0,
     "despike_window_m": 15.0,
@@ -463,6 +465,43 @@ def build_terrain(st_x, st_y, frame, dtm, ortho_tiles, p):
     return meshes
 
 
+def build_far_terrain(st_x, st_y, dtm, ortho_tiles, p):
+    """Coarse ring from just inside the detailed terrain out to far_terrain_m,
+    0.3 m lower so the detailed mesh always wins where they overlap. Distances
+    are to the nearest road point anywhere, so it never covers another part
+    of the road (hairpins)."""
+    if not p["far_terrain_m"] or p["far_terrain_m"] <= p["terrain_half_width_m"]:
+        return []
+    tree = cKDTree(np.column_stack([st_x, st_y]))
+    g = p["far_terrain_grid_m"]
+    inner = p["terrain_half_width_m"] - 2 * g
+    meshes = []
+    for tile in ortho_tiles:
+        minx, miny, maxx, maxy = tile["bounds"]
+        xs = np.arange(minx, maxx + g / 2, g)
+        ys = np.arange(miny, maxy + g / 2, g)
+        GX, GY = np.meshgrid(xs, ys[::-1])
+        gx, gy = GX.ravel(), GY.ravel()
+        dist, _ = tree.query(np.column_stack([gx, gy]), distance_upper_bound=p["far_terrain_m"] + g)
+        ring = np.isfinite(dist) & (dist >= inner)
+        if not ring.any():
+            continue
+        z = np.full(len(gx), np.nan)
+        z[ring] = dtm.sample(gx[ring], gy[ring]) - 0.3
+        keep = ring & np.isfinite(z)
+        faces = grid_faces(*GX.shape)
+        faces = faces[keep[faces].all(axis=1)]
+        if len(faces) == 0:
+            continue
+        used = np.unique(faces)
+        remap = -np.ones(len(gx), np.int64)
+        remap[used] = np.arange(len(used))
+        verts = np.column_stack([gx[used], gy[used], z[used]])
+        uvs = np.column_stack([(gx[used] - minx) / (maxx - minx), (gy[used] - miny) / (maxy - miny)])
+        meshes.append((tile, verts, remap[faces].astype(np.int32), uvs))
+    return meshes
+
+
 def ortho_tile_list(ortho_dir):
     tiles = []
     for jpg in sorted(Path(ortho_dir).glob("ortho_*.jpg")):
@@ -550,6 +589,7 @@ def main():
     verges = build_verges(x, y, edges, frame, dtm, p)
     print("Terrain…")
     terr = build_terrain(x, y, frame, dtm, ortho, p)
+    far = build_far_terrain(x, y, dtm, ortho, p)
 
     # local origin (kept in the manifest to go back to Lambert-93)
     x0 = round(float(np.mean(x)), -1)
@@ -608,6 +648,14 @@ def main():
         materials[mname] = tile["file"].name
         shutil.copy(tile["file"], tex / tile["file"].name)
         add(phys_name("GRASS", f"terrain_{mname[6:]}"), mname, verts, faces, uvs, "GRASS")
+    near_mats = set(materials)
+    for tile, verts, faces, uvs in far:
+        mname = f"ortho_{int(tile['bounds'][0])}_{int(tile['bounds'][1])}"
+        if mname not in materials:
+            materials[mname] = tile["file"].name
+            shutil.copy(tile["file"], tex / tile["file"].name)
+        add(phys_name("GRASS", f"far_{mname[6:]}"), mname, verts, faces, uvs, "GRASS")
+    far_only = sorted(set(materials) - near_mats)
 
     asphalt_texture(tex / "asphalt.png", float(np.median(widths)), p["texture_repeat_m"],
                     paint_lines=painted is None and p["markings"] != "none")
@@ -623,6 +671,7 @@ def main():
         "origin_lambert93": [x0, y0, z0],
         "length_m": float(s[-1]),
         "objects": objects, "materials": materials, "dummies": dm,
+        "far_only_materials": far_only,   # textures only seen from afar: kn5_export uses a lower resolution
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
 
