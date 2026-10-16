@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Étape 1 du pipeline : récupérer les données ouvertes d'un tronçon de route.
+Pipeline stage 1: fetch the open data for one road section.
 
-    python fetch.py osm      # tracé de la route (OpenStreetMap, sinon BD TOPO IGN)
-    python fetch.py mnt      # dalles MNT LiDAR HD (relief, 50 cm)
-    python fetch.py ortho    # orthophotos IGN 20 cm autour de la route
-    python fetch.py lidar    # nuage de points LiDAR HD du couloir (lecture COPC partielle)
-    python fetch.py all      # osm + mnt + ortho (le LiDAR, lourd, se lance à part)
+    python fetch.py osm      # road centreline (OpenStreetMap, IGN BD TOPO fallback)
+    python fetch.py mnt      # LiDAR HD DTM tiles (terrain, 50 cm)
+    python fetch.py ortho    # IGN 20 cm orthophotos around the road
+    python fetch.py lidar    # LiDAR HD point cloud of the corridor (partial COPC reads)
+    python fetch.py all      # osm + mnt + ortho (LiDAR is heavy, run it separately)
 
-Toutes les géométries sont en Lambert-93 (EPSG:2154), en mètres.
+All geometries are in Lambert-93 (EPSG:2154), in metres.
 """
 import argparse
 import json
@@ -35,15 +35,15 @@ OVERPASS = [
 ]
 WFS = "https://data.geopf.fr/wfs/ows"
 WMS = "https://data.geopf.fr/wms-r/wms"
-# Une entité par dalle de 1 km² avec les URLs du MNT/MNS/MNH (GeoTIFF 50 cm) et du
-# nuage de points (COPC .laz). Vérifié le 16/10/2026 ; l'IGN renomme parfois ses couches.
+# One feature per 1 km² tile, holding the URLs of the DTM/DSM/CHM (50 cm GeoTIFF)
+# and of the point cloud (COPC .laz). Checked 2026-10-16; IGN renames layers now and then.
 LAYER_LIDAR_META = "IGNF_LIDAR-HD_METADONNEE:metadata"
 
 TO_L93 = Transformer.from_crs(4326, 2154, always_xy=True)
 TO_WGS = Transformer.from_crs(2154, 4326, always_xy=True)
 
 
-# ---------------------------------------------------------------- utilitaires
+# ------------------------------------------------------------------ helpers
 def load_cfg(path):
     with open(path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -73,7 +73,7 @@ def http_get(url, params=None, stream=False, retries=4):
 
 
 def download(url, dest):
-    """Téléchargement reprenable (fichier .part), saute si déjà présent."""
+    """Resumable download (via a .part file); skipped if the file already exists."""
     dest = Path(dest)
     if dest.exists() and dest.stat().st_size > 0:
         return False
@@ -122,11 +122,11 @@ def corridor_area(cfg, route):
     return route.buffer(cfg["corridor_m"], cap_style="flat")
 
 
-# ------------------------------------------------------------- tracé route
+# ---------------------------------------------------------- road centreline
 def route_from_lines(lines, start_xy, end_xy, label="les tronçons", gap_m=60):
-    """Plus court chemin sur un ensemble de polylignes (Lambert-93) entre les
-    sommets les plus proches du départ et de l'arrivée. Les polylignes sont
-    reliées là où leurs sommets coïncident (à 10 cm près)."""
+    """Shortest path over a set of polylines (Lambert-93) between the vertices
+    closest to the start and end points. Polylines are joined wherever their
+    vertices coincide (to within 10 cm)."""
     if not lines:
         raise RuntimeError(f"Aucun tronçon trouvé dans {label} : vérifie osm_ref_regex et les points.")
     key = lambda c: (round(c[0], 1), round(c[1], 1))
@@ -137,8 +137,8 @@ def route_from_lines(lines, start_xy, end_xy, label="les tronçons", gap_m=60):
             if a != b:
                 G.add_edge(a, b, length=math.dist(a, b))
 
-    # Les ronds-points et carrefours n'ont souvent pas le numéro de route : on
-    # recoud les bouts de tracé dont les extrémités sont à moins de gap_m.
+    # Roundabouts and junctions often lack the road number: stitch together
+    # pieces whose end vertices are less than gap_m apart.
     comps = list(nx.connected_components(G))
     if len(comps) > 1:
         ends = [[n for n in c if G.degree(n) == 1] or list(c) for c in comps]
@@ -193,7 +193,7 @@ def overpass(query, rounds=2):
 
 def lines_from_osm(cfg, start_ll, end_ll):
     lats, lons = [start_ll[1], end_ll[1]], [start_ll[0], end_ll[0]]
-    m = 0.02  # ~2 km de marge
+    m = 0.02  # ~2 km margin
     bbox = f"{min(lats) - m:.5f},{min(lons) - m:.5f},{max(lats) + m:.5f},{max(lons) + m:.5f}"
     q = f"""[out:json][timeout:90];
 way["highway"]["ref"~"{cfg['osm_ref_regex']}"]({bbox});
@@ -207,8 +207,8 @@ way["highway"]["ref"~"{cfg['osm_ref_regex']}"]({bbox});
 
 
 def lines_from_ign(cfg, start_ll, end_ll):
-    """Tronçons de la BD TOPO (IGN) dont un attribut (numéro de route) matche
-    osm_ref_regex. Même licence ouverte que le LiDAR."""
+    """IGN BD TOPO road segments with an attribute (the road number, field
+    `cpx_numero`) matching osm_ref_regex. Same open licence as the LiDAR."""
     import re
 
     rx = re.compile(cfg["osm_ref_regex"])
@@ -253,16 +253,16 @@ def cmd_osm(cfg):
     print(f"→ Vérifie-le en glissant {cfg['_dir'] / 'route_wgs84.geojson'} sur https://geojson.io")
 
 
-# ----------------------------------------------------------------- dalles IGN
+# ------------------------------------------------------------------ IGN tiles
 def _to_l93_if_needed(g):
     x, y = g.centroid.x, g.centroid.y
-    if abs(x) <= 180 and abs(y) <= 90:  # le serveur a répondu en lon/lat
+    if abs(x) <= 180 and abs(y) <= 90:  # the server answered in lon/lat
         return shp_transform(TO_L93.transform, g)
     return g
 
 
 def _tile_name(url):
-    """Nom de fichier : paramètre FILENAME= (MNT servi en WMS) ou fin de l'URL (LAZ)."""
+    """File name: the FILENAME= parameter (DTM served via WMS) or the URL path tail (LAZ)."""
     from urllib.parse import parse_qs, urlparse
 
     q = parse_qs(urlparse(url).query)
@@ -273,7 +273,7 @@ def _tile_name(url):
 
 
 def select_tiles(features, area, url_key):
-    """Dalles 1 km² de la couche métadonnées LiDAR HD qui touchent `area`."""
+    """1 km² tiles from the LiDAR HD metadata layer that intersect `area`."""
     out, seen = [], set()
     for f in features:
         g = _to_l93_if_needed(shape(f["geometry"]))
@@ -313,8 +313,8 @@ def wfs_features(layer, area):
 
 
 def lidar_tiles(area, url_key):
-    """url_key : 'url_mnt' (MNT GeoTIFF 50 cm), 'url_npl' (nuage COPC .laz),
-    'url_mns', 'url_mnh'."""
+    """url_key: 'url_mnt' (50 cm DTM GeoTIFF), 'url_npl' (COPC .laz point cloud),
+    'url_mns' (DSM), 'url_mnh' (canopy height)."""
     return select_tiles(wfs_features(LAYER_LIDAR_META, area), area, url_key)
 
 
@@ -333,8 +333,8 @@ def cmd_mnt(cfg):
 
 # -------------------------------------------------------------------- LiDAR
 def _new_las_header(src_header):
-    """En-tête LAS 1.4 neuf (sans les VLR propres au COPC) mais même format de
-    points, mêmes échelles/décalages."""
+    """Fresh LAS 1.4 header (without the COPC-specific VLRs) keeping the same
+    point format, scales and offsets."""
     import laspy
 
     h = laspy.LasHeader(point_format=src_header.point_format, version="1.4")
@@ -351,7 +351,7 @@ def _filter(pts, area, classes):
 
 
 def corridor_cells(area, tile_bounds, cell_m):
-    """Cases carrées (sans recouvrement) de la dalle qui touchent le couloir."""
+    """Non-overlapping square cells of the tile that touch the corridor."""
     minx, miny, maxx, maxy = tile_bounds
     cells = []
     y = miny
@@ -367,8 +367,8 @@ def corridor_cells(area, tile_bounds, cell_m):
 
 
 def crop_copc_remote(url, dst, area, classes, tile_bounds, cell_m=150):
-    """Lit à distance (requêtes HTTP Range) uniquement les morceaux du nuage COPC
-    qui touchent le couloir : quelques dizaines de Mo au lieu de ~1 Go/dalle."""
+    """Remotely read (HTTP Range requests) only the parts of the COPC cloud that
+    touch the corridor: a few tens of MB instead of ~1 GB per tile."""
     import laspy
     from laspy.copc import Bounds
 
@@ -380,7 +380,7 @@ def crop_copc_remote(url, dst, area, classes, tile_bounds, cell_m=150):
             for k, (x0, y0, x1, y1) in enumerate(cells, 1):
                 pts = rdr.query(Bounds(mins=np.array([x0, y0]), maxs=np.array([x1, y1])))
                 if len(pts):
-                    # bornes inclusives côté COPC : on évite les doublons entre cases
+                    # COPC query bounds are inclusive: avoid duplicates between cells
                     x, y = np.asarray(pts.x), np.asarray(pts.y)
                     pts = pts[(x >= x0) & (x < x1) & (y >= y0) & (y < y1)]
                 pts = _filter(pts, area, classes)
@@ -393,7 +393,7 @@ def crop_copc_remote(url, dst, area, classes, tile_bounds, cell_m=150):
 
 
 def crop_laz_local(src, dst, area, classes):
-    """Variante sans COPC : dalle entière téléchargée puis découpée par blocs."""
+    """Non-COPC fallback: download the whole tile, then crop it chunk by chunk."""
     import laspy
 
     shapely.prepare(area)
@@ -435,7 +435,7 @@ def cmd_lidar(cfg, yes=False, full=False):
         if not full:
             try:
                 n = crop_copc_remote(t["url"], tmp, area, classes, t["bounds"])
-            except Exception as e:  # serveur sans Range, laspy trop ancien…
+            except Exception as e:  # no Range support, laspy too old…
                 tmp.unlink(missing_ok=True)
                 sys.exit(f"\n    ! Lecture COPC à distance impossible ({type(e).__name__}: {e})\n"
                          "    Envoie-moi ce message. En attendant : `python fetch.py lidar --full`\n"
@@ -457,7 +457,7 @@ def cmd_lidar(cfg, yes=False, full=False):
 
 # ------------------------------------------------------------------- ortho
 def ortho_grid(area, res, px=2000):
-    """Cellules carrées de `px` pixels qui touchent la zone."""
+    """Square cells of `px` pixels that touch the area."""
     step = res * px
     minx, miny, maxx, maxy = area.bounds
     x0, y0 = math.floor(minx / step) * step, math.floor(miny / step) * step

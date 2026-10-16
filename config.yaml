@@ -1,27 +1,28 @@
-# Tronçon à générer
+# Road section to generate
 name: route-napoleon-stvallier-escragnolles
 
-# Points de départ / arrivée (WGS84). Ils sont "aimantés" au nœud OSM le plus proche
-# de la route, donc pas besoin d'être précis : clique sur la route dans
-# Google Maps / Géoportail pour les affiner si besoin.
+# Start / end points (WGS84). They snap to the nearest vertex of the road, so they
+# don't need to be precise: click on the road in Google Maps / Géoportail to
+# refine them if needed.
 start: {lat: 43.6981, lon: 6.8486}   # Saint-Vallier-de-Thiey
-end:   {lat: 43.7312, lon: 6.7784}   # Escragnolles (sur la D6085, au nord du village)
+end:   {lat: 43.7312, lon: 6.7784}   # Escragnolles (on the D6085, north of the village)
 
-# Dans les Alpes-Maritimes, la Route Napoléon (ex-N85) s'appelle D 6085 dans OSM.
+# In the Alpes-Maritimes the Route Napoléon (ex-N85) is tagged D 6085 in OSM
+# (D6085 in the BD TOPO `cpx_numero` field).
 osm_ref_regex: "^(D ?6085|N ?85)$"
 
-# Demi-largeur du couloir autour de l'axe de la route où l'on garde le LiDAR (m).
-# Large exprès : accotements, fossés, talus utiles pour la piste.
+# Half-width of the corridor around the road axis where LiDAR is kept (m).
+# Wide on purpose: shoulders, ditches and banks are useful for the track.
 corridor_m: 40
 
-# Marge autour de la route pour le terrain (MNT) et les orthophotos (m).
+# Margin around the road for terrain (DTM) and orthophotos (m).
 terrain_margin_m: 300
 
-# Classes LiDAR HD gardées : 2 = sol, 17 = tablier de pont
+# LiDAR HD classes kept: 2 = ground, 17 = bridge deck
 lidar_classes: [2, 17]
 
-# Les dalles LAZ brutes font 0,5 à 2 Go chacune. false = on les supprime
-# juste après la découpe (le pic disque reste ~1 dalle).
+# `lidar --full` only: raw LAZ tiles are 0.5-2 GB each. false = delete each one
+# right after cropping (peak disk usage stays at ~1 tile).
 keep_raw_laz: false
 
 ortho_layer: HR.ORTHOIMAGERY.ORTHOPHOTOS

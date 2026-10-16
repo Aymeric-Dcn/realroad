@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Aperçu du tronçon : profil altimétrique, pente et virages, à partir du MNT.
+Section preview: elevation profile, grade and curves, from the DTM.
 
-    python preview.py            → data/<nom>/preview.png + stats dans le terminal
+    python preview.py            → data/<name>/preview.png + stats in the terminal
 """
 import argparse
 import json
@@ -14,7 +14,7 @@ from fetch import load_cfg, load_route
 
 
 class MntSampler:
-    """Lit l'altitude en (x, y) Lambert-93 dans un ensemble de dalles GeoTIFF."""
+    """Read elevation at Lambert-93 (x, y) from a set of GeoTIFF tiles."""
 
     def __init__(self, files):
         import rasterio
@@ -51,15 +51,15 @@ def smooth(a, n):
 
 
 def rolling_median(a, n):
-    n = max(3, n | 1)  # impair
+    n = max(3, n | 1)  # odd window
     pad = np.pad(a, n // 2, mode="edge")
     return np.median(np.lib.stride_tricks.sliding_window_view(pad, n), axis=1)
 
 
 def fix_bridges(d, z, step, window_m=30.0, tol_m=1.5):
-    """Le MNT est le sol nu : sous un pont il plonge dans le ravin. On repère les
-    creux étroits (plus bas que la médiane locale) et on les remplace par une
-    interpolation entre les deux culées. Renvoie z corrigé + liste des zones."""
+    """The DTM is bare earth: under a bridge it dives into the ravine. Detect
+    narrow dips (below the local median) and replace them by interpolating
+    between the two abutments. Returns the corrected z + the list of zones."""
     med = rolling_median(z, int(window_m / step))
     bad = (med - z) > tol_m
     zones, i = [], 0
@@ -79,7 +79,7 @@ def fix_bridges(d, z, step, window_m=30.0, tol_m=1.5):
 
 def heading_curvature(xs, ys, step, window_m=24.0):
     n = max(1, int(window_m / step))
-    xs, ys = smooth(xs, n), smooth(ys, n)  # on lisse le tracé (sommets OSM anguleux)
+    xs, ys = smooth(xs, n), smooth(ys, n)  # smooth the line (OSM vertices are angular)
     h = np.unwrap(np.arctan2(np.gradient(ys), np.gradient(xs)))
     return smooth(np.gradient(h) / step, n)  # 1/m
 
@@ -108,7 +108,7 @@ def main():
     for s0, s1, depth in bridges:
         print(f"  · pont / ouvrage probable km {s0 / 1000:.2f} "
               f"({s1 - s0 + a.step:.0f} m, creux de {depth:.1f} m dans le MNT) → corrigé")
-    zs = smooth(z, int(20 / a.step))  # lissage sur ~20 m pour la pente
+    zs = smooth(z, int(20 / a.step))  # ~20 m smoothing for the grade
     slope = np.gradient(zs, a.step) * 100
     k = np.abs(heading_curvature(xs, ys, a.step))
     radius = np.full_like(k, np.inf)
