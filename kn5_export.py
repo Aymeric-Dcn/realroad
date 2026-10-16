@@ -43,6 +43,10 @@ MATERIALS = {
     "road": {"ksAmbient": 0.30, "ksDiffuse": 0.35, "ksSpecular": 0.12, "ksSpecularEXP": 12.0},
     "verge": {"ksAmbient": 0.40, "ksDiffuse": 0.40, "ksSpecular": 0.0, "ksSpecularEXP": 1.0},
     "marking": {"ksAmbient": 0.40, "ksDiffuse": 0.45, "ksSpecular": 0.15, "ksSpecularEXP": 20.0},
+    # Kunos tree materials: shader ksTree, alpha tested, mostly ambient (0.35-0.55 / 0.1-0.2);
+    # scaled down like the terrain
+    "trees": {"ksAmbient": 0.30, "ksDiffuse": 0.14, "ksSpecular": 0.0, "ksSpecularEXP": 1.0, "ksAlphaRef": 0.3},
+    "facade": {"ksAmbient": 0.30, "ksDiffuse": 0.30, "ksSpecular": 0.05, "ksSpecularEXP": 10.0},
 }
 DEFAULTS = {
     "ortho_texture_px": 2048,    # orthophoto tiles are resampled to this (power of two)
@@ -121,6 +125,43 @@ def dds_dxt1(img, size=None):
     return _dds_header(w, h, len(data[0]), levels) + b"".join(data)
 
 
+def dds_rgba(img, size, alpha_ref=0.3):
+    """PIL image → uncompressed 32-bit BGRA .dds with mipmaps. The alpha of each
+    mip level is rescaled so that the share of pixels above alpha_ref stays the
+    same: alpha-tested foliage does not thin out with distance."""
+    img = img.convert("RGBA")
+    if img.size != size:
+        img = img.resize(size, Image.LANCZOS)
+    base = np.asarray(img, np.float32) / 255.0
+    cover = float((base[..., 3] > alpha_ref).mean())
+    w, h = size
+    data, cur, levels = [], img, 0
+    while True:
+        a = np.asarray(cur, np.float32) / 255.0
+        if levels > 0 and cover > 0:
+            lo, hi = 0.5, 6.0
+            for _ in range(20):
+                mid = (lo + hi) / 2
+                if (np.clip(a[..., 3] * mid, 0, 1) > alpha_ref).mean() < cover:
+                    lo = mid
+                else:
+                    hi = mid
+            a[..., 3] = np.clip(a[..., 3] * (lo + hi) / 2, 0, 1)
+        bgra = (a[..., [2, 1, 0, 3]] * 255 + 0.5).astype(np.uint8)
+        data.append(bgra.tobytes())
+        levels += 1
+        cw, ch = cur.size
+        if cw == 1 and ch == 1:
+            break
+        cur = cur.resize((max(1, cw // 2), max(1, ch // 2)), Image.BOX)
+    hdr = struct.pack("<4sIIIIIII", b"DDS ", 124, 0x2100F, h, w, w * 4, 0, levels)
+    hdr += b"\0" * 44
+    hdr += struct.pack("<II4s5I", 32, 0x41, b"\0\0\0\0", 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)
+    hdr += struct.pack("<5I", 0x401008, 0, 0, 0, 0)
+    assert len(hdr) == 128
+    return hdr + b"".join(data)
+
+
 def _dds_header(w, h, top_size, levels):
     hdr = struct.pack("<4sIIIIIII", b"DDS ", 124, 0xA1007, h, w, top_size, 0, levels)
     hdr += b"\0" * 44                                     # reserved1[11]
@@ -166,11 +207,11 @@ class Kn5Writer:
         self.u32(len(data))
         self.raw(data)
 
-    def material(self, name, props, texture, shader="ksPerPixel"):
+    def material(self, name, props, texture, shader="ksPerPixel", alpha_tested=False):
         self.s(name)
         self.s(shader)
         self.u8(0)    # blend mode: opaque
-        self.u8(0)    # alpha tested
+        self.u8(1 if alpha_tested else 0)
         self.i32(0)   # depth mode: normal
         values = {"ksAmbient": 0.4, "ksDiffuse": 0.4, "ksSpecular": 0.0, "ksSpecularEXP": 1.0,
                   "ksEmissive": 0.0, "ksAlphaRef": 0.0, **props}
@@ -605,8 +646,10 @@ def main():
         w.header()
         w.i32(len(mat_names))
         tex_size = {}
+        specs = {m: (v if isinstance(v, dict) else {"texture": v}) for m, v in man["materials"].items()}
         for i, m in enumerate(mat_names):
-            src = tex_dir / man["materials"][m]
+            spec = specs[m]
+            src = tex_dir / spec["texture"]
             img = Image.open(src)
             if m in far_only:
                 size = (p["ortho_far_texture_px"],) * 2
@@ -615,11 +658,12 @@ def main():
             else:
                 size = tuple(min(p["max_texture_px"], max(4, 1 << round(math.log2(s)))) for s in img.size)
             # encoded textures are cached: re-exports (and interrupted runs) are fast
-            cached = dds_cache / f"{src.stem}_{src.stat().st_size}_{size[0]}x{size[1]}.dds"
+            alpha = bool(spec.get("alpha"))
+            cached = dds_cache / f"{src.stem}_{src.stat().st_size}_{size[0]}x{size[1]}{'_rgba' if alpha else ''}.dds"
             if cached.exists():
                 dds = cached.read_bytes()
             else:
-                dds = dds_dxt1(img, size)
+                dds = dds_rgba(img, size) if alpha else dds_dxt1(img, size)
                 part = cached.with_suffix(".part")
                 part.write_bytes(dds)
                 part.replace(cached)
@@ -629,8 +673,10 @@ def main():
                 print(f"  textures {i + 1}/{len(mat_names)}", flush=True)
         w.i32(len(mat_names))
         for m in mat_names:
-            kind = "terrain" if m.startswith(("ortho_", "backdrop_")) else m
-            w.material(m, mats.get(kind, mats["terrain"]), f"{m}.dds")
+            spec = specs[m]
+            kind = spec.get("kind") or ("terrain" if m.startswith(("ortho_", "backdrop_")) else m)
+            w.material(m, mats.get(kind, mats["terrain"]), f"{m}.dds",
+                       shader=spec.get("shader", "ksPerPixel"), alpha_tested=bool(spec.get("alpha")))
         # node tree: root → meshes + dummies
         objs = man["objects"]
         w.dummy("realroad", np.eye(4), len(objs) + len(man["dummies"]))

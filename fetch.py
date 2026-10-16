@@ -7,6 +7,9 @@ Pipeline stage 1: fetch the open data for one road section.
     python fetch.py ortho    # IGN 20 cm orthophotos around the road
     python fetch.py lidar    # LiDAR HD point cloud of the corridor (--remote: partial COPC reads)
     python fetch.py far      # low-resolution relief + imagery for the horizon (~8 km around)
+    python fetch.py mnh      # LiDAR HD canopy height (trees), 50 cm
+    python fetch.py buildings  # IGN BD TOPO buildings (footprint, heights) near the road
+    python fetch.py streetview # Panoramax street-level photos along the road (open licence)
     python fetch.py all      # osm + mnt + ortho (LiDAR is heavy, run it separately)
 
 All geometries are in Lambert-93 (EPSG:2154), in metres.
@@ -334,6 +337,118 @@ def cmd_mnt(cfg):
         download(t["url"], dest)
 
 
+def cmd_mnh(cfg):
+    """Canopy height model (LiDAR HD MNH): height of trees above the ground."""
+    route = load_route(cfg)
+    area = route.buffer(cfg.get("trees_margin_m", 250))
+    tiles = lidar_tiles(area, "url_mnh")
+    if not tiles:
+        sys.exit("No canopy height tile found for this area.")
+    (cfg["_dir"] / "mnh_tiles.json").write_text(json.dumps(tiles, indent=1), encoding="utf-8")
+    print(f"{len(tiles)} canopy height tiles to fetch.")
+    for i, t in enumerate(tiles, 1):
+        print(f"  [{i}/{len(tiles)}] {t['name']}")
+        download(t["url"], cfg["_dir"] / "mnh" / t["name"])
+
+
+def cmd_buildings(cfg):
+    """BD TOPO buildings near the road: footprint + hauteur, altitude_minimale_sol,
+    altitude_minimale_toit (eaves), altitude_maximale_toit (ridge)."""
+    route = load_route(cfg)
+    margin = cfg.get("buildings_margin_m", 250)
+    area = route.buffer(margin)
+    feats = wfs_features(cfg.get("ign_buildings_layer", "BDTOPO_V3:batiment"), area)
+    keep = []
+    for f in feats:
+        try:
+            g = _to_l93_if_needed(shape(f["geometry"]))
+        except Exception:
+            continue
+        if g.is_empty or not g.intersects(area):
+            continue
+        props = {k: (f.get("properties") or {}).get(k) for k in (
+            "cleabs", "hauteur", "altitude_minimale_sol", "altitude_maximale_sol",
+            "altitude_minimale_toit", "altitude_maximale_toit", "nature", "usage_1",
+            "construction_legere", "nombre_d_etages")}
+        keep.append({"type": "Feature", "properties": props, "geometry": mapping(g)})
+    out = cfg["_dir"] / "buildings_l93.geojson"
+    out.write_text(json.dumps({"type": "FeatureCollection", "features": keep}), encoding="utf-8")
+    print(f"{len(keep)} buildings within {margin} m of the road → {out}")
+
+
+PANORAMAX = "https://api.panoramax.xyz/api"
+
+
+def cmd_streetview(cfg):
+    """Panoramax (open street-level imagery, IGN and contributors): pictures along
+    the road, one every streetview_step_m, standard definition (2048 px)."""
+    route = load_route(cfg)
+    step = cfg.get("streetview_step_m", 20)
+    out = cfg["_dir"] / "streetview"
+    out.mkdir(exist_ok=True)
+    # 1. index of the pictures near the road (search boxes every 150 m)
+    items = {}
+    n_box = max(1, int(route.length / 150))
+    for i in range(n_box + 1):
+        pt = route.interpolate(i * route.length / n_box)
+        lon0, lat0 = TO_WGS.transform(pt.x - 110, pt.y - 110)
+        lon1, lat1 = TO_WGS.transform(pt.x + 110, pt.y + 110)
+        try:
+            r = http_get(f"{PANORAMAX}/search", params={
+                "bbox": f"{lon0:.6f},{lat0:.6f},{lon1:.6f},{lat1:.6f}", "limit": 500}, retries=3)
+            feats = r.json().get("features", [])
+        except (RuntimeError, ValueError) as e:
+            print(f"  ! search {i}: {e}")
+            continue
+        for f in feats:
+            pr = f.get("properties") or {}
+            sd = ((f.get("assets") or {}).get("sd") or {}).get("href")
+            if not sd:
+                continue
+            lon, lat = f["geometry"]["coordinates"][:2]
+            x, y = TO_L93.transform(lon, lat)
+            items[f["id"]] = {
+                "id": f["id"], "x": x, "y": y, "lon": lon, "lat": lat, "sd": sd,
+                "azimuth": pr.get("view:azimuth"), "datetime": pr.get("datetime"),
+                "fov": (pr.get("pers:interior_orientation") or {}).get("field_of_view"),
+                "license": pr.get("license"), "producer": ((f.get("providers") or [{}])[0]).get("name"),
+                "collection": f.get("collection"),
+            }
+        if i % 20 == 0:
+            print(f"  search {i}/{n_box}: {len(items)} pictures so far")
+    if not items:
+        sys.exit("No Panoramax picture found along the road.")
+    # 2. one picture per step along the road (nearest to the station, within 15 m)
+    pts = list(items.values())
+    xy = np.array([[p["x"], p["y"]] for p in pts])
+    chosen, covered = [], 0
+    stations = np.arange(0, route.length, step)
+    for sv in stations:
+        q = route.interpolate(sv)
+        d = np.hypot(xy[:, 0] - q.x, xy[:, 1] - q.y)
+        k = int(d.argmin())
+        if d[k] <= 15:
+            covered += 1
+            if not chosen or chosen[-1]["id"] != pts[k]["id"]:
+                chosen.append({**pts[k], "s_m": float(sv), "dist_m": float(d[k])})
+    print(f"Coverage: {100 * covered / len(stations):.0f} % of the road within 15 m of a picture "
+          f"({len(items)} pictures found, {len(chosen)} kept, one per {step} m).")
+    (out / "index.json").write_text(json.dumps(chosen, indent=1), encoding="utf-8")
+    # 3. download (resumable)
+    for i, p in enumerate(chosen, 1):
+        dest = out / f"{int(p['s_m']):06d}_{p['id']}.jpg"
+        p["file"] = dest.name
+        if not dest.exists():
+            try:
+                download(p["sd"], dest)
+            except Exception as e:  # one missing picture is not fatal
+                print(f"  ! {p['id']}: {e}")
+        if i % 50 == 0:
+            print(f"  [{i}/{len(chosen)}] pictures")
+    (out / "index.json").write_text(json.dumps(chosen, indent=1), encoding="utf-8")
+    print(f"→ {out} (licence: {', '.join(sorted({str(p['license']) for p in chosen}))})")
+
+
 # -------------------------------------------------------------------- LiDAR
 def _new_las_header(src_header):
     """Fresh LAS 1.4 header (without the COPC-specific VLRs) keeping the same
@@ -582,7 +697,7 @@ def cmd_far(cfg):
 # --------------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("step", choices=["osm", "mnt", "ortho", "lidar", "far", "all"])
+    ap.add_argument("step", choices=["osm", "mnt", "ortho", "lidar", "far", "mnh", "buildings", "streetview", "all"])
     ap.add_argument("-c", "--config", default="config.yaml")
     ap.add_argument("--remote", action="store_true",
                     help="lidar: partial remote COPC reads instead of downloading whole tiles")
@@ -598,6 +713,12 @@ def main():
         cmd_lidar(cfg, a.remote)
     if a.step == "far":
         cmd_far(cfg)
+    if a.step == "mnh":
+        cmd_mnh(cfg)
+    if a.step == "buildings":
+        cmd_buildings(cfg)
+    if a.step == "streetview":
+        cmd_streetview(cfg)
 
 
 if __name__ == "__main__":

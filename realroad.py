@@ -20,14 +20,19 @@ STEPS = [
     ("ortho", ["fetch.py", "ortho"], "aerial imagery"),
     ("lidar", ["fetch.py", "lidar"], "corridor point cloud"),
     ("far", ["fetch.py", "far"], "distant relief for the horizon (optional)"),
+    ("mnh", ["fetch.py", "mnh"], "canopy height for the trees (optional)"),
+    ("buildings", ["fetch.py", "buildings"], "BD TOPO buildings (optional)"),
+    ("streetview", ["fetch.py", "streetview"], "Panoramax street-level photos (optional)"),
     ("road_profile", ["road_profile.py"], "elevation, crossfall, bridges"),
     ("road_edges", ["road_edges.py"], "real carriageway edges"),
     ("road_markings", ["road_markings.py"], "real centre and edge lines"),
+    ("trees", ["trees.py"], "tree positions, heights, kinds (optional)"),
     ("build_track", ["build_track.py"], "track geometry"),
     ("kn5_export", ["kn5_export.py"], "Assetto Corsa track folder"),
+    ("streetview_sheet", ["streetview_sheet.py"], "street-level comparison sheet (optional)"),
 ]
 
-OPTIONAL = {"far"}
+OPTIONAL = {"far", "mnh", "buildings", "streetview", "trees", "streetview_sheet"}
 
 
 def main():

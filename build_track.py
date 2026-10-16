@@ -56,6 +56,10 @@ DEFAULTS = {
     "far_terrain_m": 290.0,      # coarse terrain ring out to this distance (0 = off); data reach ~300 m
     "far_terrain_grid_m": 10.0,
     "backdrop_grid_m": 50.0,     # distant relief (fetch.py far), visual only
+    "trees": True,               # billboards from trees.csv (trees.py) when present
+    "buildings": True,           # from buildings_l93.geojson (fetch.py buildings) when present
+    "buildings_max_m": 200.0,
+    "buildings_min_area_m2": 8.0,
     "z_sigma_m": 6.0,
     "crossfall_sigma_m": 10.0,
     "despike_window_m": 15.0,
@@ -682,10 +686,10 @@ def main():
 
     arrays, objects = {}, []
 
-    def add(name, material, verts, faces, uvs, physical_surface=None, smooth_shading=True):
+    def add(name, material, verts, faces, uvs, physical_surface=None, smooth_shading=True, keep_winding=False):
         assert len(verts) <= AC_MAX_VERTS, (name, len(verts))
         assert np.isfinite(verts).all(), name
-        faces = fix_winding_up(verts, faces.copy())
+        faces = faces.copy() if keep_winding else fix_winding_up(verts, faces.copy())
         i = len(objects)
         arrays[f"v{i}"], arrays[f"f{i}"], arrays[f"uv{i}"] = local(verts), faces, uvs.astype(np.float32)
         objects.append({"name": name, "material": material, "key": i,
@@ -769,7 +773,39 @@ def main():
         add(mname, mname, verts, faces, uvs)                              # visual only
     if backdrop:
         print(f"  distant relief: {len(backdrop)} tiles, {sum(len(b[1]) for b in backdrop):,} vertices")
-    far_only = sorted(set(materials) - near_mats)
+
+    # 3D scenery (visual only): trees (trees.py) and buildings (fetch.py buildings)
+    from scenery import build_buildings, build_trees
+    from textures import facade_texture, tree_atlas
+
+    scen = []
+    if p["trees"] and (d / "trees.csv").exists():
+        tm = build_trees(d / "trees.csv", dtm, ortho)
+        pal_f = d / "trees_palette.json"
+        pal = json.loads(pal_f.read_text()) if pal_f.exists() else {
+            "pine": [62, 78, 52], "broadleaf": [88, 100, 66], "shrub": [104, 104, 74]}
+        tree_atlas(tex / "trees.png", pal)
+        materials["trees"] = {"texture": "trees.png", "shader": "ksTree", "alpha": True, "kind": "trees"}
+        scen += tm
+        print(f"  trees: {sum(len(m_[2]) for m_ in tm) // 8:,} billboards in {len(tm)} meshes")
+    elif p["trees"]:
+        print("  (no trees.csv: run `python fetch.py mnh` then `python trees.py` for the trees)")
+    if p["buildings"] and (d / "buildings_l93.geojson").exists():
+        half = np.maximum(-frame["right"], frame["left"])
+        bm, n_b, n_g = build_buildings(d / "buildings_l93.geojson", dtm, ortho, cKDTree(np.column_stack([x, y])), half, p)
+        for m_ in bm:
+            if m_[1].startswith("ortho_"):
+                use_tile(next(t_ for t_ in ortho if f"ortho_{int(t_['bounds'][0])}_{int(t_['bounds'][1])}" == m_[1]))
+        if bm:
+            facade_texture(tex / "facade.png")
+            materials["facade"] = {"texture": "facade.png", "kind": "facade"}
+        scen += bm
+        print(f"  buildings: {n_b} ({n_g} with a gable roof)")
+    elif p["buildings"]:
+        print("  (no buildings_l93.geojson: run `python fetch.py buildings` for the buildings)")
+    for name, mat, sv, sf, suv, keep in scen:
+        add(name, mat, sv, sf, suv, keep_winding=keep)
+    far_only = sorted(m_ for m_ in set(materials) - near_mats if m_.startswith(("ortho_", "backdrop_")))
 
     asphalt_texture(tex / "asphalt.png", float(np.median(widths)), p["texture_repeat_m"],
                     paint_lines=painted is None and p["markings"] != "none")

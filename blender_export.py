@@ -81,7 +81,8 @@ def main():
     data = np.load(build / "meshes.npz")
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
-    mats = {m: make_material(m, build / "texture" / f) for m, f in man["materials"].items()}
+    mats = {m: make_material(m, build / "texture" / (f["texture"] if isinstance(f, dict) else f))
+            for m, f in man["materials"].items()}
     for i, o in enumerate(man["objects"], 1):
         k = o["key"]
         make_mesh(o["name"], data[f"v{k}"], data[f"f{k}"], data[f"uv{k}"], mats[o["material"]], o["smooth"])
