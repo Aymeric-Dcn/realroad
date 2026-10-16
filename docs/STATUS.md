@@ -63,7 +63,7 @@ The wider terrain needs a run on the PC (`python realroad.py --from road_marking
 **Known limits**:
 - estimated edges under trees and through Saint-Vallier;
 - paved shoulders beyond the edge lines are treated as verge;
-- nothing beyond ~300 m;
+- distant relief (`fetch.py far`) written but not tested yet;
 - no 3D trees.
 
 **Next**: vegetation from the LiDAR, paved shoulders, automatic QA.
