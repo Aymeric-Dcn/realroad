@@ -57,7 +57,8 @@ avec `--spawn-flip` à la fin.
 4. **File → Save KN5 → track** → enregistrer sous
    `data\<nom>\track_build\ac_track\<id>\<id>.kn5` (même nom que le dossier, en minuscules)
 
-<!-- capture : ksEditor après import -->
+<!-- capture : ksEditor après import → docs/img/ingame/kseditor.jpg
+![ksEditor](img/ingame/kseditor.jpg) -->
 
 ### 5. Installer et rouler
 
@@ -67,7 +68,8 @@ Copy-Item -Recurse -Force "data\<nom>\track_build\ac_track\<id>" "C:\Program Fil
 
 Content Manager → **Drive → Quick Drive** → choisir la piste → mode **Practice**.
 
-<!-- capture : en jeu -->
+<!-- captures : en jeu → docs/img/ingame/01.jpg, 02.jpg…
+![En jeu](img/ingame/01.jpg) -->
 
 ### Problèmes rencontrés
 
@@ -134,7 +136,8 @@ If cars spawn facing backwards in game, run the Blender command again with
 4. **File → Save KN5 → track** → save as
    `data\<name>\track_build\ac_track\<id>\<id>.kn5` (same name as the folder, lowercase)
 
-<!-- screenshot: ksEditor after import -->
+<!-- screenshot: ksEditor after import → docs/img/ingame/kseditor.jpg
+![ksEditor](img/ingame/kseditor.jpg) -->
 
 ### 5. Install and drive
 
@@ -144,7 +147,8 @@ Copy-Item -Recurse -Force "data\<name>\track_build\ac_track\<id>" "C:\Program Fi
 
 Content Manager → **Drive → Quick Drive** → pick the track → **Practice** mode.
 
-<!-- screenshot: in game -->
+<!-- screenshots: in game → docs/img/ingame/01.jpg, 02.jpg…
+![In game](img/ingame/01.jpg) -->
 
 ### Troubleshooting
 

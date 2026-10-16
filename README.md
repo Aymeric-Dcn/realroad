@@ -1,12 +1,22 @@
 # realroad
 
-**🇫🇷 [Français](#-français) · 🇬🇧 [English](#-english) · 📘 [Tutoriel / Tutorial](docs/TUTORIAL.md)**
+**🇫🇷 [Français](#-français) · 🇬🇧 [English](#-english) · 📘 [Tutoriel / Tutorial](docs/TUTORIAL.md) · 📍 [État / Status](docs/STATUS.md)**
 
 Routes réelles → pistes de simulation, générées automatiquement à partir de
 données ouvertes. / Real-world roads → driving-sim tracks, generated
 automatically from open data.
 
 Auteur / Author : **Aymeric Duchene**
+
+<!-- In-game screenshots: drop them in docs/img/ingame/ and uncomment.
+![En jeu / In game](docs/img/ingame/01.jpg)
+-->
+
+![Bords mesurés / Measured edges](docs/img/edges_overlay.png)
+
+| Profil LiDAR de la route / LiDAR road profile | Route « déroulée » / Unrolled road |
+|---|---|
+| ![profile](docs/img/road_profile.png) | ![unrolled](docs/img/edges_unrolled.png) |
 
 ---
 
@@ -46,7 +56,7 @@ python fetch.py lidar    # nuage de points du couloir (~10 min, ~120 Mo gardés)
 python road_profile.py   # vrai profil de la chaussée : altitude, dévers, ponts
 python road_edges.py     # vrais bords de la chaussée : largeur et centre réels
 python build_track.py    # géométrie de la piste (route, accotements, terrain, départs AC)
-& "C:\Program Files\Blender Foundation\Blender 4.2\blender.exe" --factory-startup -b -P blender_export.py -- data\<nom>\track_build
+& "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" --factory-startup -b -P blender_export.py -- data\<nom>\track_build
 ```
 
 Puis dans `assettocorsa\sdk\editor\ksEditor.exe` : importer le FBX de
@@ -64,6 +74,8 @@ Les données vont dans `data/<nom-du-tronçon>/` (ignoré par Git).
 | Relief | MNT LiDAR HD | Dalles 1 km², GeoTIFF float32 au pas de 50 cm, listées par la couche WFS `IGNF_LIDAR-HD_METADONNEE:metadata`. |
 | Ponts | MNT | Le MNT est le sol nu et plonge sous les ponts : creux étroits repérés et interpolés (aperçu). La vraie altitude viendra des points LiDAR classe 17. |
 | Profil route | Nuage LiDAR | Stations tous les 1 m ; droite robuste z = z0 + c·t sur ±2,5 m autour de l'axe → altitude, dévers, rugosité. Tabliers de pont (classe 17) prioritaires ; axe signalé suspect si dévers > 12 % ou rms > 12 cm. |
+| Bords de chaussée | LiDAR + orthophoto + BD TOPO | Lignes de rive (pics d'intensité LiDAR + blanc sur l'ortho) → bord = ligne + 0,3 m ; ligne cachée reconstruite par symétrie autour de la ligne centrale ; saut d'intensité LiDAR dans le relief sinon ; BD TOPO comme garde-fou. Largeur médiane 7,35 m (6,3–9 m) sur la Route Napoléon. |
+| Lissage | — | Écrêtage (médiane 15 m) puis gaussienne σ 6 m (altitude) / 10 m (dévers) : rayon vertical mini ~520 m, écart max au LiDAR < 10 cm. |
 | Nuage de points | LiDAR HD COPC | Dalles téléchargées puis découpées au couloir (±40 m) et supprimées ; on garde le sol (2) et les tabliers de pont (17). `--remote` : lecture partielle HTTP Range (plus lente, limitée par l'IGN). |
 
 ### Feuille de route
@@ -72,9 +84,11 @@ Les données vont dans `data/<nom-du-tronçon>/` (ignoré par Git).
 2. ✅ Nuage de points LiDAR du couloir
 3. ✅ Profil en long et en travers depuis le LiDAR (altitude, dévers, ponts)
 4. ✅ Maillage route + terrain, export FBX via Blender
-5. ✅ ksEditor → piste Assetto Corsa roulable (premier essai le 16/10/2026) ; reste : AI line, caméras, carte, kn5 sans ksEditor
-6. Végétation, bâtiments, panneaux
-7. Contrôle qualité automatique : règles de génie civil (pente, dévers ↔ courbure), cohérence entre sources, score de confiance par mètre, reconstruction droites/clothoïdes/paraboles, télémétrie d'une IA qui roule sur la piste
+5. ✅ ksEditor → piste Assetto Corsa roulable (premier essai le 16/10/2026) : route reconnaissable, bosses lissées, largeur réelle mesurée
+6. 🔜 Écrire le kn5 directement (plus de ksEditor), AI line, caméras, carte et miniatures
+7. Accotements goudronnés au-delà des lignes, marquages réels (ligne continue/discontinue) depuis le LiDAR
+8. Végétation, bâtiments, panneaux
+9. Contrôle qualité automatique : règles de génie civil (pente, dévers ↔ courbure), cohérence entre sources, score de confiance par mètre, reconstruction droites/clothoïdes/paraboles, télémétrie d'une IA qui roule sur la piste
 
 ---
 
@@ -113,7 +127,7 @@ python fetch.py lidar    # corridor point cloud (~10 min, ~120 MB kept)
 python road_profile.py   # real road surface: elevation, crossfall, bridges
 python road_edges.py     # real carriageway edges: true width and centre
 python build_track.py    # track geometry (road, verges, terrain, AC spawn points)
-& "C:\Program Files\Blender Foundation\Blender 4.2\blender.exe" --factory-startup -b -P blender_export.py -- data\<name>\track_build
+& "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" --factory-startup -b -P blender_export.py -- data\<name>\track_build
 ```
 
 Then in `assettocorsa\sdk\editor\ksEditor.exe`: import the FBX from
@@ -131,6 +145,8 @@ to `data/<section-name>/` (git-ignored).
 | Terrain | LiDAR HD DTM | 1 km² tiles, float32 GeoTIFF at 50 cm, listed by the WFS layer `IGNF_LIDAR-HD_METADONNEE:metadata`. |
 | Bridges | DTM | The DTM is bare earth and dives under bridges: narrow dips are detected and interpolated (preview). Real deck height will come from class-17 LiDAR points. |
 | Road profile | LiDAR cloud | 1 m stations; robust line z = z0 + c·t over ±2.5 m around the axis → elevation, crossfall, roughness. Bridge decks (class 17) take priority; axis flagged as suspect if crossfall > 12 % or rms > 12 cm. |
+| Carriageway edges | LiDAR + orthophoto + BD TOPO | Edge lines (LiDAR intensity peaks + white in the orthophoto) → edge = line + 0.3 m; hidden line mirrored about the centre marking; LiDAR intensity step within the terrain otherwise; BD TOPO as a guard rail. Median width 7.35 m (6.3-9 m) on the Route Napoléon. |
+| Smoothing | — | Despike (15 m median) then Gaussian sigma 6 m (elevation) / 10 m (crossfall): min vertical radius ~520 m, max deviation from LiDAR < 10 cm. |
 | Point cloud | LiDAR HD COPC | Tiles downloaded, cropped to the corridor (±40 m) and deleted; ground (2) and bridge decks (17) are kept. `--remote`: partial HTTP Range reads (slower, rate-limited by IGN). |
 
 ### Roadmap
@@ -139,9 +155,11 @@ to `data/<section-name>/` (git-ignored).
 2. ✅ Corridor LiDAR point cloud
 3. ✅ Longitudinal and cross profiles from LiDAR (elevation, crossfall, bridges)
 4. ✅ Road + terrain mesh, FBX export through Blender
-5. ✅ ksEditor → drivable Assetto Corsa track (first drive on 2026-10-16); to do: AI line, cameras, map, kn5 without ksEditor
-6. Vegetation, buildings, signs
-7. Automatic QA: road-design rules (grade, crossfall vs curvature), cross-source consistency, per-metre confidence score, line/clothoid/parabola reconstruction, telemetry from an AI driving the track
+5. ✅ ksEditor → drivable Assetto Corsa track (first drive on 2026-10-16): recognisable road, bumps smoothed, real width measured
+6. 🔜 Write the kn5 directly (no more ksEditor), AI line, cameras, map and previews
+7. Paved shoulders beyond the edge lines, real markings (solid/dashed) from the LiDAR
+8. Vegetation, buildings, signs
+9. Automatic QA: road-design rules (grade, crossfall vs curvature), cross-source consistency, per-metre confidence score, line/clothoid/parabola reconstruction, telemetry from an AI driving the track
 
 ---
 
