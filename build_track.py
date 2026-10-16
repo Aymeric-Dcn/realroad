@@ -4,13 +4,18 @@ Pipeline stage 3: build the track geometry for Assetto Corsa.
 
     python build_track.py      → data/<name>/track_build/  (meshes.npz, manifest.json, texture/)
 
-then, with Blender (no UI needed):
+then write the AC track (stage 4):
 
-    blender --factory-startup -b -P blender_export.py -- data/<name>/track_build
+    python kn5_export.py --install "<assettocorsa folder>"
+
+(the older route, still working: Blender → FBX → ksEditor, see blender_export.py)
 
 Geometry, all in metres:
-  - road: ribbon (width per segment from BD TOPO) built from road_profile.csv (LiDAR elevation
-    and crossfall), physical surface ROAD
+  - road: ribbon built from road_profile.csv (LiDAR elevation and crossfall),
+    edges measured by road_edges.py (BD TOPO width where not measured),
+    physical surface ROAD
+  - markings: the real centre/edge lines from road_markings.py, thin strips
+    2 cm above the asphalt (visual only); generic ones in the texture otherwise
   - verges: strips from the road edge down/up to the DTM, surface GRASS
   - terrain: DTM grid around the road, textured with the IGN orthophotos
     (one mesh per 400 m ortho tile), surface GRASS; pushed under the road
@@ -54,6 +59,10 @@ DEFAULTS = {
     "crossfall_clip_pct": 10.0,
     "road_chunk_m": 200.0,
     "texture_repeat_m": 13.0,
+    "markings": "auto",          # "auto" = real markings from road_markings.csv when present, "texture", "none"
+    "marking_width_m": {"centre": 0.12, "left": 0.15, "right": 0.15},
+    "marking_lift_m": 0.02,      # above the asphalt (visual only, no physics)
+    "marking_inset_m": 0.3,      # edge line centre, inside the carriageway edge
     "start_offset_m": 15.0,
 }
 
@@ -168,9 +177,9 @@ def write_png(path, rgb):
     mpimg.imsave(path, np.clip(rgb, 0, 1))
 
 
-def asphalt_texture(path, width_m, length_m, px_per_m=80, seed=1):
-    """Asphalt with French markings: dashed centre line (3 m line / 10 m gap,
-    T1 type) and continuous edge lines, 12 cm wide."""
+def asphalt_texture(path, width_m, length_m, px_per_m=80, seed=1, paint_lines=True):
+    """Asphalt, with generic French markings painted in (dashed T1 centre line,
+    continuous edge lines, 12 cm) unless the real markings are built as meshes."""
     rng = np.random.default_rng(seed)
     w, h = int(width_m * px_per_m), int(length_m * px_per_m)
     base = 0.24 + 0.05 * rng.standard_normal((h, w))
@@ -180,12 +189,22 @@ def asphalt_texture(path, width_m, length_m, px_per_m=80, seed=1):
     line = int(0.12 * px_per_m)
     edge_in = int(0.25 * px_per_m)
     paint = np.array([0.86, 0.86, 0.84])
+    if not paint_lines:
+        img += 0.02 * rng.standard_normal(img.shape)
+        write_png(path, img)
+        return
     img[:, edge_in:edge_in + line] = paint
     img[:, w - edge_in - line:w - edge_in] = paint
     c0 = w // 2 - line // 2
     dash = int(3.0 * px_per_m)
     img[:dash, c0:c0 + line] = paint
     img += 0.02 * rng.standard_normal(img.shape)
+    write_png(path, img)
+
+
+def paint_texture(path, size=64, seed=3):
+    rng = np.random.default_rng(seed)
+    img = np.array([0.84, 0.84, 0.81]) + 0.03 * rng.standard_normal((size, size, 1))
     write_png(path, img)
 
 
@@ -319,6 +338,60 @@ def build_road(s, x, y, z, cf_pct, right, left, p):
     edges = {"right": (X[:, 0], Y[:, 0], Z[:, 0]), "left": (X[:, -1], Y[:, -1], Z[:, -1])}
     frame = {"tx": tx, "ty": ty, "nx": nx, "ny": ny, "z": zs, "c": c, "right": right, "left": left}
     return (X, Y, Z, U, V), edges, frame
+
+
+def load_markings(cfg, s, p):
+    """Painted metres per line from road_markings.csv, or None."""
+    if p["markings"] != "auto":
+        return None
+    f = cfg["_dir"] / "road_markings.csv"
+    if not f.exists():
+        print("  (no road_markings.csv: generic markings in the asphalt texture; "
+              "run `python road_markings.py` for the real ones)")
+        return None
+    m = np.genfromtxt(f, delimiter=",", names=True)
+    if len(m) != len(s):
+        print("  ! road_markings.csv is out of date (run `python road_markings.py` again): generic markings")
+        return None
+    return {k: m[k] > 0 for k in ("right", "centre", "left")}
+
+
+def build_markings(x, y, frame, painted, p, chunk_rows=500):
+    """Thin strips 2 cm above the road for every painted run: list of
+    (line, verts, faces, uvs). Rows follow the road stations; one mesh per
+    ~500 stations so AC can cull them like the road chunks."""
+    out = []
+    r, l = frame["right"], frame["left"]
+    inset = p["marking_inset_m"]
+    offsets = {"right": r + inset, "left": l - inset, "centre": (r + l) / 2}
+    n = len(x)
+    for line, on in painted.items():
+        t = offsets[line]
+        hw = p["marking_width_m"][line] / 2
+        cols = np.stack([t - hw, t + hw], 1)                         # right → left
+        X = x[:, None] + cols * frame["nx"][:, None]
+        Y = y[:, None] + cols * frame["ny"][:, None]
+        Z = frame["z"][:, None] + frame["c"][:, None] * cols + p["marking_lift_m"]
+        V, F, UV = [], [], []
+        base = 0
+        m = np.r_[False, on, False].astype(np.int8)
+        starts, ends = np.flatnonzero(np.diff(m) == 1), np.flatnonzero(np.diff(m) == -1)
+        for a, b in zip(starts, ends):
+            b = min(b, n - 1)                                        # run covers stations a..b
+            if b <= a:
+                continue
+            k = b - a + 1
+            V.append(np.column_stack([X[a:b + 1].ravel(), Y[a:b + 1].ravel(), Z[a:b + 1].ravel()]))
+            UV.append(np.column_stack([np.tile([0.0, 1.0], k), np.repeat(np.arange(k, dtype=float), 2)]))
+            F.append(grid_faces(k, 2) + base)
+            base += 2 * k
+            nxt = starts[starts > a]
+            if len(nxt) == 0 or nxt[0] // chunk_rows != a // chunk_rows:
+                out.append((line, np.concatenate(V), np.concatenate(F), np.concatenate(UV)))
+                V, F, UV, base = [], [], [], 0
+        if V:
+            out.append((line, np.concatenate(V), np.concatenate(F), np.concatenate(UV)))
+    return out
 
 
 def chunk_rows(n_rows, rows_per_chunk):
@@ -521,13 +594,23 @@ def main():
                 grid_faces(r1 - r0 + 1, VX.shape[1]), vuv, "GRASS")
 
     materials = {"road": "asphalt.png", "verge": "verge.png"}
+    painted = load_markings(cfg, s, p)
+    if painted is not None:
+        marks = build_markings(x, y, frame, painted, p)
+        for mi, (line, mv, mf, muv) in enumerate(marks):
+            add(f"marking_{line}_{mi:02d}", "marking", mv, mf, muv)   # visual only: no surface prefix
+        materials["marking"] = "paint.png"
+        paint_texture(tex / "paint.png")
+        print(f"  real markings: {len(marks)} meshes, painted "
+              + ", ".join(f"{k} {100 * v.mean():.0f} %" for k, v in painted.items()))
     for tile, verts, faces, uvs in terr:
         mname = f"ortho_{int(tile['bounds'][0])}_{int(tile['bounds'][1])}"
         materials[mname] = tile["file"].name
         shutil.copy(tile["file"], tex / tile["file"].name)
         add(phys_name("GRASS", f"terrain_{mname[6:]}"), mname, verts, faces, uvs, "GRASS")
 
-    asphalt_texture(tex / "asphalt.png", float(np.median(widths)), p["texture_repeat_m"])
+    asphalt_texture(tex / "asphalt.png", float(np.median(widths)), p["texture_repeat_m"],
+                    paint_lines=painted is None and p["markings"] != "none")
     verge_texture(tex / "verge.png")
 
     dm = dummies(s, x, y, frame, p)
@@ -543,7 +626,7 @@ def main():
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
 
-    # AC track folder skeleton: the kn5 saved by ksEditor goes next to ui/
+    # AC track folder skeleton (kn5_export.py fills it; or the kn5 saved by ksEditor)
     from fetch import TO_WGS
 
     lon, lat = TO_WGS.transform(float(np.mean(x)), float(np.mean(y)))

@@ -40,6 +40,7 @@ MATERIALS = {
     "terrain": {"ksAmbient": 0.45, "ksDiffuse": 0.35, "ksSpecular": 0.0, "ksSpecularEXP": 1.0},
     "road": {"ksAmbient": 0.35, "ksDiffuse": 0.45, "ksSpecular": 0.12, "ksSpecularEXP": 12.0},
     "verge": {"ksAmbient": 0.40, "ksDiffuse": 0.40, "ksSpecular": 0.0, "ksSpecularEXP": 1.0},
+    "marking": {"ksAmbient": 0.40, "ksDiffuse": 0.45, "ksSpecular": 0.15, "ksSpecularEXP": 20.0},
 }
 DEFAULTS = {
     "ortho_texture_px": 2048,    # orthophoto tiles are resampled to this (power of two)
