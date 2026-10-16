@@ -29,3 +29,16 @@ ortho_layer: HR.ORTHOIMAGERY.ORTHOPHOTOS
 ortho_res_m: 0.2
 
 data_dir: data
+
+# Track generation (build_track.py). Everything here has a default.
+track:
+  id: realroad_rn_stvallier_escragnolles   # AC folder name: content/tracks/<id>
+  title: "Route Napoléon — St-Vallier → Escragnolles"
+  author: Aymeric Duchene
+  city: Saint-Vallier-de-Thiey
+  road_width_m: 6.5          # D6085 here is ~6-7 m wide
+  verge_m: 2.5               # verge strip from the road edge to the terrain
+  terrain_half_width_m: 120  # terrain kept on each side of the road
+  terrain_grid_m: 2.5        # terrain mesh resolution
+  z_smooth_m: 5              # smoothing of the LiDAR elevation (removes 1 m noise)
+  crossfall_smooth_m: 15

@@ -44,7 +44,13 @@ python preview.py        # profil, pentes, virages, ponts → preview.png
 python fetch.py ortho    # photos aériennes 20 cm
 python fetch.py lidar    # nuage de points du couloir (~10 min, ~120 Mo gardés)
 python road_profile.py   # vrai profil de la chaussée : altitude, dévers, ponts
+python build_track.py    # géométrie de la piste (route, accotements, terrain, départs AC)
+& "C:\Program Files\Blender Foundation\Blender 4.2\blender.exe" --factory-startup -b -P blender_export.py -- data\<nom>\track_build
 ```
+
+Puis dans `assettocorsa\sdk\editor\ksEditor.exe` : importer le FBX de
+`track_build`, enregistrer le kn5 sous `track_build\ac_track\<id>\<id>.kn5`,
+et copier le dossier `<id>` dans `assettocorsa\content\tracks`.
 
 Toutes les commandes peuvent être relancées : ce qui est déjà là est sauté.
 Les données vont dans `data/<nom-du-tronçon>/` (ignoré par Git).
@@ -63,10 +69,11 @@ Les données vont dans `data/<nom-du-tronçon>/` (ignoré par Git).
 
 1. ✅ Tracé, relief, aperçu
 2. ✅ Nuage de points LiDAR du couloir
-3. 🔄 Profil en long et en travers depuis le LiDAR (altitude, dévers, ponts) ; reste : axe précis, bosses
-4. Maillage route + terrain dans Blender (script Python)
+3. ✅ Profil en long et en travers depuis le LiDAR (altitude, dévers, ponts)
+4. 🔄 Maillage route + terrain, export FBX via Blender
 5. Export FBX → ksEditor → piste Assetto Corsa (surfaces, AI line, départs)
 6. Végétation, bâtiments, panneaux
+7. Contrôle qualité automatique : règles de génie civil (pente, dévers ↔ courbure), cohérence entre sources, score de confiance par mètre, reconstruction droites/clothoïdes/paraboles, télémétrie d'une IA qui roule sur la piste
 
 ---
 
@@ -103,7 +110,13 @@ python preview.py        # profile, grades, curves, bridges → preview.png
 python fetch.py ortho    # 20 cm aerial imagery
 python fetch.py lidar    # corridor point cloud (~10 min, ~120 MB kept)
 python road_profile.py   # real road surface: elevation, crossfall, bridges
+python build_track.py    # track geometry (road, verges, terrain, AC spawn points)
+& "C:\Program Files\Blender Foundation\Blender 4.2\blender.exe" --factory-startup -b -P blender_export.py -- data\<name>\track_build
 ```
+
+Then in `assettocorsa\sdk\editor\ksEditor.exe`: import the FBX from
+`track_build`, save the kn5 as `track_build\ac_track\<id>\<id>.kn5`, and
+copy the `<id>` folder into `assettocorsa\content\tracks`.
 
 Every command is resumable: anything already downloaded is skipped. Data goes
 to `data/<section-name>/` (git-ignored).
@@ -122,10 +135,11 @@ to `data/<section-name>/` (git-ignored).
 
 1. ✅ Centreline, terrain, preview
 2. ✅ Corridor LiDAR point cloud
-3. 🔄 Longitudinal and cross profiles from LiDAR (elevation, crossfall, bridges); to do: precise centreline, bumps
-4. Road + terrain mesh in Blender (Python script)
+3. ✅ Longitudinal and cross profiles from LiDAR (elevation, crossfall, bridges)
+4. 🔄 Road + terrain mesh, FBX export through Blender
 5. FBX export → ksEditor → Assetto Corsa track (surfaces, AI line, spawns)
 6. Vegetation, buildings, signs
+7. Automatic QA: road-design rules (grade, crossfall vs curvature), cross-source consistency, per-metre confidence score, line/clothoid/parabola reconstruction, telemetry from an AI driving the track
 
 ---
 

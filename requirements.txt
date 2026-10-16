@@ -8,3 +8,4 @@ scipy
 laspy[lazrs]>=2.4
 rasterio
 matplotlib
+pillow
