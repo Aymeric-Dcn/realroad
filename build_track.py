@@ -53,6 +53,7 @@ DEFAULTS = {
     "terrain_grid_m": 2.5,
     "far_terrain_m": 290.0,      # coarse terrain ring out to this distance (0 = off); data reach ~300 m
     "far_terrain_grid_m": 10.0,
+    "backdrop_grid_m": 50.0,     # distant relief (fetch.py far), visual only
     "z_sigma_m": 6.0,
     "crossfall_sigma_m": 10.0,
     "despike_window_m": 15.0,
@@ -502,10 +503,51 @@ def build_far_terrain(st_x, st_y, dtm, ortho_tiles, p):
     return meshes
 
 
-def ortho_tile_list(ortho_dir):
+def build_backdrop(st_x, st_y, d, p):
+    """Distant relief for the horizon from fetch.py far: 50 m grid per 4 km
+    tile, from just inside the far terrain ring outwards. Lowered 3 m near the
+    ring so the finer terrain always wins. Visual only (no physics)."""
+    folder = d / "backdrop"
+    dem_f = folder / "backdrop_dem.tif"
+    if not dem_f.exists():
+        print("  (no distant relief: run `python fetch.py far` for the horizon)")
+        return []
+    tiles = ortho_tile_list(folder, "backdrop_*.jpg")
+    dem = FastDTM([dem_f])
+    tree = cKDTree(np.column_stack([st_x, st_y]))
+    g = p["backdrop_grid_m"]
+    start = max(p["far_terrain_m"] or 0, p["terrain_half_width_m"])
+    meshes = []
+    for tile in tiles:
+        minx, miny, maxx, maxy = tile["bounds"]
+        xs = np.arange(minx, maxx + g / 2, g)
+        ys = np.arange(miny, maxy + g / 2, g)
+        GX, GY = np.meshgrid(xs, ys[::-1])
+        gx, gy = GX.ravel(), GY.ravel()
+        dist, _ = tree.query(np.column_stack([gx, gy]))
+        keep = dist >= start - 1.5 * g
+        if not keep.any():
+            continue
+        z = np.full(len(gx), np.nan)
+        z[keep] = dem.sample(gx[keep], gy[keep]) - np.where(dist[keep] < start + 2 * g, 3.0, 0.0)
+        keep &= np.isfinite(z)
+        faces = grid_faces(*GX.shape)
+        faces = faces[keep[faces].all(axis=1)]
+        if len(faces) == 0:
+            continue
+        used = np.unique(faces)
+        remap = -np.ones(len(gx), np.int64)
+        remap[used] = np.arange(len(used))
+        verts = np.column_stack([gx[used], gy[used], z[used]])
+        uvs = np.column_stack([(gx[used] - minx) / (maxx - minx), (gy[used] - miny) / (maxy - miny)])
+        meshes.append((tile, verts, remap[faces].astype(np.int32), uvs))
+    return meshes
+
+
+def ortho_tile_list(ortho_dir, pattern="ortho_*.jpg"):
     tiles = []
-    for jpg in sorted(Path(ortho_dir).glob("ortho_*.jpg")):
-        m = re.match(r"ortho_(-?\d+)_(-?\d+)$", jpg.stem)
+    for jpg in sorted(Path(ortho_dir).glob(pattern)):
+        m = re.match(r"[a-z]+_(-?\d+)_(-?\d+)$", jpg.stem)
         jgw = jpg.with_suffix(".jgw")
         if not m or not jgw.exists():
             continue
@@ -590,6 +632,7 @@ def main():
     print("Terrain…")
     terr = build_terrain(x, y, frame, dtm, ortho, p)
     far = build_far_terrain(x, y, dtm, ortho, p)
+    backdrop = build_backdrop(x, y, d, p)
 
     # local origin (kept in the manifest to go back to Lambert-93)
     x0 = round(float(np.mean(x)), -1)
@@ -655,6 +698,13 @@ def main():
             materials[mname] = tile["file"].name
             shutil.copy(tile["file"], tex / tile["file"].name)
         add(phys_name("GRASS", f"far_{mname[6:]}"), mname, verts, faces, uvs, "GRASS")
+    for tile, verts, faces, uvs in backdrop:
+        mname = f"backdrop_{int(tile['bounds'][0])}_{int(tile['bounds'][1])}"
+        materials[mname] = tile["file"].name
+        shutil.copy(tile["file"], tex / tile["file"].name)
+        add(mname, mname, verts, faces, uvs)                              # visual only
+    if backdrop:
+        print(f"  distant relief: {len(backdrop)} tiles, {sum(len(b[1]) for b in backdrop):,} vertices")
     far_only = sorted(set(materials) - near_mats)
 
     asphalt_texture(tex / "asphalt.png", float(np.median(widths)), p["texture_repeat_m"],

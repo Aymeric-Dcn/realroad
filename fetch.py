@@ -6,6 +6,7 @@ Pipeline stage 1: fetch the open data for one road section.
     python fetch.py mnt      # LiDAR HD DTM tiles (terrain, 50 cm)
     python fetch.py ortho    # IGN 20 cm orthophotos around the road
     python fetch.py lidar    # LiDAR HD point cloud of the corridor (--remote: partial COPC reads)
+    python fetch.py far      # low-resolution relief + imagery for the horizon (~8 km around)
     python fetch.py all      # osm + mnt + ortho (LiDAR is heavy, run it separately)
 
 All geometries are in Lambert-93 (EPSG:2154), in metres.
@@ -38,6 +39,8 @@ WMS = "https://data.geopf.fr/wms-r/wms"
 # One feature per 1 km² tile, holding the URLs of the DTM/DSM/CHM (50 cm GeoTIFF)
 # and of the point cloud (COPC .laz). Checked 2026-10-16; IGN renames layers now and then.
 LAYER_LIDAR_META = "IGNF_LIDAR-HD_METADONNEE:metadata"
+# Elevation for the distant relief (RGE ALTI, then BD ALTI): first one that answers is used
+BACKDROP_DEM_LAYERS = ["ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES", "ELEVATION.ELEVATIONGRIDCOVERAGE"]
 
 TO_L93 = Transformer.from_crs(4326, 2154, always_xy=True)
 TO_WGS = Transformer.from_crs(2154, 4326, always_xy=True)
@@ -512,10 +515,74 @@ def cmd_ortho(cfg, px=2000):
         print(f"  [{i}/{len(cells)}] {name}")
 
 
+# ---------------------------------------------------------------- horizon
+def _is_tiff(b):
+    return b[:4] in (b"II*\x00", b"MM\x00*")
+
+
+def cmd_far(cfg):
+    """Low-resolution relief and imagery around the road, for the horizon:
+    one GeoTIFF DTM (25 m) and 4 km orthophoto tiles (4 m/px) out to backdrop_m."""
+    route = load_route(cfg)
+    margin = cfg.get("backdrop_m", 8000)
+    res_dem = cfg.get("backdrop_dem_res_m", 25)
+    out = cfg["_dir"] / "backdrop"
+    out.mkdir(exist_ok=True)
+    cells = ortho_grid(route.buffer(margin), 4.0, 1000)
+    minx = min(c[0] for c in cells); miny = min(c[1] for c in cells)
+    maxx = max(c[2] for c in cells); maxy = max(c[3] for c in cells)
+    dem = out / "backdrop_dem.tif"
+    if not dem.exists():
+        w, h = int((maxx - minx) / res_dem), int((maxy - miny) / res_dem)
+        layers = [cfg["backdrop_dem_layer"]] if cfg.get("backdrop_dem_layer") else BACKDROP_DEM_LAYERS
+        errors = []
+        for layer in layers:
+            try:
+                r = http_get(WMS, params={
+                    "SERVICE": "WMS", "VERSION": "1.3.0", "REQUEST": "GetMap", "LAYERS": layer,
+                    "STYLES": "", "CRS": "EPSG:2154", "BBOX": f"{minx:.2f},{miny:.2f},{maxx:.2f},{maxy:.2f}",
+                    "WIDTH": w, "HEIGHT": h, "FORMAT": "image/geotiff",
+                }, retries=2)
+            except RuntimeError as e:
+                errors.append(f"{layer}: {str(e)[-300:]}")
+                continue
+            if not _is_tiff(r.content):
+                errors.append(f"{layer}: not a GeoTIFF ({r.headers.get('Content-Type')}: {r.content[:200]!r})")
+                continue
+            dem.with_suffix(".part").write_bytes(r.content)
+            dem.with_suffix(".part").replace(dem)
+            # world file next to it, in case the GeoTIFF has no georeferencing
+            rx, ry = (maxx - minx) / w, (maxy - miny) / h
+            (out / "backdrop_dem.tfw").write_text(
+                "\n".join(str(v) for v in (rx, 0.0, 0.0, -ry, minx + rx / 2, maxy - ry / 2)) + "\n")
+            print(f"Distant relief: {layer}, {w}x{h} px at {res_dem} m.")
+            break
+        else:
+            raise SystemExit("No elevation layer answered for the distant relief:\n  " + "\n  ".join(errors)
+                             + "\nSet backdrop_dem_layer in config.yaml (see the WMS-R GetCapabilities).")
+    print(f"{len(cells)} distant orthophoto tiles (4 km, 4 m/px).")
+    for i, c in enumerate(cells, 1):
+        name = f"backdrop_{int(c[0])}_{int(c[1])}"
+        jpg = out / f"{name}.jpg"
+        if jpg.exists():
+            continue
+        r = http_get(WMS, params={
+            "SERVICE": "WMS", "VERSION": "1.3.0", "REQUEST": "GetMap",
+            "LAYERS": cfg["ortho_layer"], "STYLES": "", "CRS": "EPSG:2154",
+            "BBOX": ",".join(f"{v:.2f}" for v in c), "WIDTH": 1000, "HEIGHT": 1000,
+            "FORMAT": "image/jpeg",
+        })
+        if not r.headers.get("Content-Type", "").startswith("image"):
+            raise RuntimeError(f"Unexpected WMS response: {r.text[:300]}")
+        jpg.write_bytes(r.content)
+        (out / f"{name}.jgw").write_text(world_file(c, 1000))
+        print(f"  [{i}/{len(cells)}] {name}")
+
+
 # --------------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("step", choices=["osm", "mnt", "ortho", "lidar", "all"])
+    ap.add_argument("step", choices=["osm", "mnt", "ortho", "lidar", "far", "all"])
     ap.add_argument("-c", "--config", default="config.yaml")
     ap.add_argument("--remote", action="store_true",
                     help="lidar: partial remote COPC reads instead of downloading whole tiles")
@@ -529,6 +596,8 @@ def main():
         cmd_ortho(cfg)
     if a.step == "lidar":
         cmd_lidar(cfg, a.remote)
+    if a.step == "far":
+        cmd_far(cfg)
 
 
 if __name__ == "__main__":

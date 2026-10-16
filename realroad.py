@@ -19,12 +19,15 @@ STEPS = [
     ("mnt", ["fetch.py", "mnt"], "terrain (LiDAR HD DTM)"),
     ("ortho", ["fetch.py", "ortho"], "aerial imagery"),
     ("lidar", ["fetch.py", "lidar"], "corridor point cloud"),
+    ("far", ["fetch.py", "far"], "distant relief for the horizon (optional)"),
     ("road_profile", ["road_profile.py"], "elevation, crossfall, bridges"),
     ("road_edges", ["road_edges.py"], "real carriageway edges"),
     ("road_markings", ["road_markings.py"], "real centre and edge lines"),
     ("build_track", ["build_track.py"], "track geometry"),
     ("kn5_export", ["kn5_export.py"], "Assetto Corsa track folder"),
 ]
+
+OPTIONAL = {"far"}
 
 
 def main():
@@ -50,6 +53,9 @@ def main():
         print(f"\n=== {n}: {what}", flush=True)
         t = time.time()
         r = subprocess.run(args)
+        if r.returncode != 0 and n in OPTIONAL:
+            print(f"    ! optional step '{n}' failed: going on without it")
+            continue
         if r.returncode != 0:
             raise SystemExit(f"\nStep '{n}' failed (exit code {r.returncode}). Fix it, then resume with "
                              f"`python realroad.py --from {n}`.")

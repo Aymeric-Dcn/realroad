@@ -34,12 +34,11 @@ loin ?), minimap, IA (Track Day), caméras de replay.
 **Limites connues**
 - Sous les arbres et dans la traversée de Saint-Vallier, les bords sont estimés.
 - Les accotements goudronnés au-delà des lignes sont traités comme de l'accotement.
-- Au-delà de ~300 m, rien (pas de relief lointain à l'horizon).
+- Relief lointain (`fetch.py far`) écrit mais pas encore testé : le nom de la couche IGN d'altitude est à confirmer au premier lancement.
 - Pas d'arbres en volume (l'orthophoto seule).
 
 **Prochaines étapes proposées** : végétation depuis le LiDAR (classes 3-5),
-relief lointain (RGE ALTI + ortho basse résolution sur ~10 km), accotements
-goudronnés, puis contrôle qualité automatique.
+accotements goudronnés, puis contrôle qualité automatique.
 
 ## 🇬🇧
 
@@ -67,4 +66,4 @@ The wider terrain needs a run on the PC (`python realroad.py --from road_marking
 - nothing beyond ~300 m;
 - no 3D trees.
 
-**Next**: vegetation from the LiDAR, distant relief, paved shoulders, automatic QA.
+**Next**: vegetation from the LiDAR, paved shoulders, automatic QA.

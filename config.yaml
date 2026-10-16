@@ -27,6 +27,7 @@ keep_raw_laz: false
 
 ortho_layer: HR.ORTHOIMAGERY.ORTHOPHOTOS
 ortho_res_m: 0.2
+backdrop_m: 8000          # fetch.py far: distant relief + imagery out to this distance (horizon)
 
 data_dir: data
 

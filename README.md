@@ -64,6 +64,7 @@ python fetch.py osm      # tracé (OpenStreetMap, sinon BD TOPO IGN)
 python fetch.py mnt      # relief LiDAR HD 50 cm (~16 Mo par km²)
 python fetch.py ortho    # photos aériennes 20 cm
 python fetch.py lidar    # nuage de points du couloir (~10 min, ~120 Mo gardés)
+python fetch.py far      # relief et photos à basse résolution sur ~8 km (l'horizon)
 python road_profile.py   # vrai profil de la chaussée : altitude, dévers, ponts
 python road_edges.py     # vrais bords de la chaussée : largeur et centre réels
 python road_markings.py  # vrais marquages : ligne centrale et lignes de rive
@@ -90,7 +91,7 @@ Les données vont dans `data/<nom-du-tronçon>/` (ignoré par Git).
 | Bords de chaussée | LiDAR + orthophoto + BD TOPO | Lignes de rive (pics d'intensité LiDAR + blanc sur l'ortho) → bord = ligne + 0,3 m ; ligne cachée reconstruite par symétrie autour de la ligne centrale ; saut d'intensité LiDAR dans le relief sinon ; BD TOPO comme garde-fou. Largeur médiane 7,35 m (6,3–9 m) sur la Route Napoléon. |
 | Marquages | Orthophoto + LiDAR | Ligne centrale et lignes de rive suivies mètre par mètre (pic blanc sur l'ortho + pic d'intensité LiDAR), découpées en tronçons continus / pointillés / absents ; pointillés gardés là où ils sont vus, complétés au pas local. Bandes blanches 2 cm au-dessus du bitume. |
 | Lissage | — | Écrêtage (médiane 15 m) puis gaussienne σ 6 m (altitude) / 10 m (dévers) : rayon vertical mini ~520 m, écart max au LiDAR < 10 cm. |
-| Piste AC | — | `.kn5` écrit en Python (format vérifié sur les pistes Kunos), textures DDS DXT1 avec mipmaps, AI line `fast_lane.ai`, minimap, caméras. Terrain détaillé à 120 m puis anneau grossier jusqu'à ~300 m. |
+| Piste AC | — | `.kn5` écrit en Python (format vérifié sur les pistes Kunos), textures DDS DXT1 avec mipmaps, AI line `fast_lane.ai`, minimap, caméras. Terrain détaillé à 120 m, anneau grossier jusqu'à ~300 m, puis relief lointain (RGE ALTI 25 m + ortho 4 m) jusqu'à ~8 km. |
 | Nuage de points | LiDAR HD COPC | Dalles téléchargées puis découpées au couloir (±40 m) et supprimées ; on garde le sol (2) et les tabliers de pont (17). `--remote` : lecture partielle HTTP Range (plus lente, limitée par l'IGN). |
 
 ### Feuille de route
@@ -101,7 +102,7 @@ Les données vont dans `data/<nom-du-tronçon>/` (ignoré par Git).
 4. ✅ Maillage route + terrain, export FBX via Blender
 5. ✅ ksEditor → piste Assetto Corsa roulable (premier essai le 16/10/2026) : route reconnaissable, bosses lissées, largeur réelle mesurée
 6. ✅ kn5 écrit directement (plus de ksEditor), AI line, caméras, minimap, miniatures ; marquages réels ; terrain étendu (v0.2, à tester en jeu)
-7. 🔜 Végétation (arbres depuis le LiDAR), relief lointain à l'horizon, accotements goudronnés
+7. 🔜 Végétation (arbres depuis le LiDAR), accotements goudronnés ; relief lointain (à tester)
 8. Bâtiments, panneaux, glissières
 9. Contrôle qualité automatique : règles de génie civil (pente, dévers ↔ courbure), cohérence entre sources, score de confiance par mètre, reconstruction droites/clothoïdes/paraboles, télémétrie d'une IA qui roule sur la piste
 
@@ -144,6 +145,7 @@ python fetch.py osm      # centreline (OpenStreetMap, IGN BD TOPO fallback)
 python fetch.py mnt      # 50 cm LiDAR HD terrain (~16 MB per km²)
 python fetch.py ortho    # 20 cm aerial imagery
 python fetch.py lidar    # corridor point cloud (~10 min, ~120 MB kept)
+python fetch.py far      # low-resolution relief and imagery over ~8 km (the horizon)
 python road_profile.py   # real road surface: elevation, crossfall, bridges
 python road_edges.py     # real carriageway edges: true width and centre
 python road_markings.py  # real markings: centre line and edge lines
@@ -169,7 +171,7 @@ Downloads resume where they stopped. Data goes to `data/<section-name>/`
 | Carriageway edges | LiDAR + orthophoto + BD TOPO | Edge lines (LiDAR intensity peaks + white in the orthophoto) → edge = line + 0.3 m; hidden line mirrored about the centre marking; LiDAR intensity step within the terrain otherwise; BD TOPO as a guard rail. Median width 7.35 m (6.3-9 m) on the Route Napoléon. |
 | Markings | Orthophoto + LiDAR | Centre and edge lines followed metre by metre (white peak in the orthophoto + LiDAR intensity peak), split into continuous / dashed / absent stretches; dashes kept where they are seen, completed at the local spacing. White strips 2 cm above the asphalt. |
 | Smoothing | — | Despike (15 m median) then Gaussian sigma 6 m (elevation) / 10 m (crossfall): min vertical radius ~520 m, max deviation from LiDAR < 10 cm. |
-| AC track | — | `.kn5` written from Python (format checked against Kunos tracks), DXT1 DDS textures with mipmaps, `fast_lane.ai` AI line, minimap, cameras. Detailed terrain to 120 m, then a coarse ring to ~300 m. |
+| AC track | — | `.kn5` written from Python (format checked against Kunos tracks), DXT1 DDS textures with mipmaps, `fast_lane.ai` AI line, minimap, cameras. Detailed terrain to 120 m, a coarse ring to ~300 m, then distant relief (RGE ALTI 25 m + 4 m ortho) out to ~8 km. |
 | Point cloud | LiDAR HD COPC | Tiles downloaded, cropped to the corridor (±40 m) and deleted; ground (2) and bridge decks (17) are kept. `--remote`: partial HTTP Range reads (slower, rate-limited by IGN). |
 
 ### Roadmap
@@ -180,7 +182,7 @@ Downloads resume where they stopped. Data goes to `data/<section-name>/`
 4. ✅ Road + terrain mesh, FBX export through Blender
 5. ✅ ksEditor → drivable Assetto Corsa track (first drive on 2026-10-16): recognisable road, bumps smoothed, real width measured
 6. ✅ kn5 written directly (no more ksEditor), AI line, cameras, minimap, previews; real markings; wider terrain (v0.2, to test in game)
-7. 🔜 Vegetation (trees from the LiDAR), distant relief on the horizon, paved shoulders
+7. 🔜 Vegetation (trees from the LiDAR), paved shoulders; distant relief (to test)
 8. Buildings, signs, guardrails
 9. Automatic QA: road-design rules (grade, crossfall vs curvature), cross-source consistency, per-metre confidence score, line/clothoid/parabola reconstruction, telemetry from an AI driving the track
 

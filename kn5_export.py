@@ -627,7 +627,7 @@ def main():
                 print(f"  textures {i + 1}/{len(mat_names)}", flush=True)
         w.i32(len(mat_names))
         for m in mat_names:
-            kind = "terrain" if m.startswith("ortho_") else m
+            kind = "terrain" if m.startswith(("ortho_", "backdrop_")) else m
             w.material(m, mats.get(kind, mats["terrain"]), f"{m}.dds")
         # node tree: root → meshes + dummies
         objs = man["objects"]
@@ -637,7 +637,7 @@ def main():
             k = o["key"]
             verts, faces, uvs = data[f"v{k}"], data[f"f{k}"], data[f"uv{k}"]
             assert len(verts) <= KN5_MAX_VERTS, o["name"]
-            inset = tex_size[o["material"]] if o["material"].startswith("ortho_") else None
+            inset = tex_size[o["material"]] if o["material"].startswith(("ortho_", "backdrop_")) else None
             vb, centre, radius = kn5_vertices(verts, faces.astype(np.int64), uvs, inset)
             w.mesh(o["name"], vb, faces.astype("<u2"), mat_names.index(o["material"]), centre, radius)
             nv += len(verts)
