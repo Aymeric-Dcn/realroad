@@ -65,11 +65,16 @@ python fetch.py mnt      # relief LiDAR HD 50 cm (~16 Mo par km²)
 python fetch.py ortho    # photos aériennes 20 cm
 python fetch.py lidar    # nuage de points du couloir (~10 min, ~120 Mo gardés)
 python fetch.py far      # relief et photos à basse résolution sur ~8 km (l'horizon)
+python fetch.py mnh      # hauteur de la végétation (LiDAR HD) pour les arbres
+python fetch.py buildings  # bâtiments BD TOPO (emprise, hauteurs)
+python fetch.py streetview # photos 360° Panoramax le long de la route
 python road_profile.py   # vrai profil de la chaussée : altitude, dévers, ponts
 python road_edges.py     # vrais bords de la chaussée : largeur et centre réels
 python road_markings.py  # vrais marquages : ligne centrale et lignes de rive
+python trees.py          # vrais arbres : position, hauteur, couronne, essence
 python build_track.py    # géométrie de la piste (route, marquages, terrain, départs AC)
 python kn5_export.py --install "<dossier assettocorsa>"   # piste AC complète
+python streetview_sheet.py # planche « vue conducteur » tous les 250 m, pour comparer avec le jeu
 ```
 
 `kn5_export.py` écrit directement le `.kn5` (plus besoin de Blender ni de
@@ -90,6 +95,9 @@ Les données vont dans `data/<nom-du-tronçon>/` (ignoré par Git).
 | Profil route | Nuage LiDAR | Stations tous les 1 m ; droite robuste z = z0 + c·t sur ±2,5 m autour de l'axe → altitude, dévers, rugosité. Tabliers de pont (classe 17) prioritaires ; axe signalé suspect si dévers > 12 % ou rms > 12 cm. |
 | Bords de chaussée | LiDAR + orthophoto + BD TOPO | Lignes de rive (pics d'intensité LiDAR + blanc sur l'ortho) → bord = ligne + 0,3 m ; ligne cachée reconstruite par symétrie autour de la ligne centrale ; saut d'intensité LiDAR dans le relief sinon ; BD TOPO comme garde-fou. Largeur médiane 7,35 m (6,3–9 m) sur la Route Napoléon. |
 | Marquages | Orthophoto + LiDAR | Ligne centrale et lignes de rive suivies mètre par mètre (pic blanc sur l'ortho + pic d'intensité LiDAR), découpées en tronçons continus / pointillés / absents ; pointillés gardés là où ils sont vus, complétés au pas local. Bandes blanches 2 cm au-dessus du bitume. |
+| Arbres | MNH LiDAR HD + orthophoto | Sommets = maxima locaux de la hauteur de végétation lissée (fenêtre qui grandit avec la hauteur), rayon de couronne lu sur le MNH, pin / feuillu / arbuste selon la hauteur et la couleur sur l'ortho ; billboards croisés (shader ksTree), textures générées dans les couleurs de l'ortho. ~50-120 arbres/ha mesurés sur le tracé. |
+| Bâtiments | BD TOPO | Emprise extrudée du sol à l'égout (altitude_minimale_toit), toit à deux pans jusqu'au faîtage réel sur les emprises quasi rectangulaires, toit plat sinon ; toits texturés par l'orthophoto (vraies couleurs), façades génériques. |
+| Photos de rue | Panoramax (IGN, Etalab 2.0) | Photos 360° de la route (IGN, avril 2026, tout le tracé) → vues « conducteur » pour comparer avec le jeu. Données hors Git. |
 | Lissage | — | Écrêtage (médiane 15 m) puis gaussienne σ 6 m (altitude) / 10 m (dévers) : rayon vertical mini ~520 m, écart max au LiDAR < 10 cm. |
 | Piste AC | — | `.kn5` écrit en Python (format vérifié sur les pistes Kunos), textures DDS DXT1 avec mipmaps, AI line `fast_lane.ai`, minimap, caméras. Terrain détaillé à 120 m, anneau grossier jusqu'à ~300 m, puis relief lointain (RGE ALTI 25 m + ortho 4 m) jusqu'à ~8 km. |
 | Nuage de points | LiDAR HD COPC | Dalles téléchargées puis découpées au couloir (±40 m) et supprimées ; on garde le sol (2) et les tabliers de pont (17). `--remote` : lecture partielle HTTP Range (plus lente, limitée par l'IGN). |
@@ -102,9 +110,10 @@ Les données vont dans `data/<nom-du-tronçon>/` (ignoré par Git).
 4. ✅ Maillage route + terrain, export FBX via Blender
 5. ✅ ksEditor → piste Assetto Corsa roulable (premier essai le 16/10/2026) : route reconnaissable, bosses lissées, largeur réelle mesurée
 6. ✅ kn5 écrit directement (plus de ksEditor), AI line, caméras, minimap, miniatures ; marquages réels ; terrain étendu et relief lointain (v0.2)
-7. 🔜 Végétation (arbres depuis le LiDAR), accotements goudronnés
-8. Bâtiments, panneaux, glissières
+7. ✅ Arbres (LiDAR), bâtiments (BD TOPO), photos de rue Panoramax (v0.3, à tester en jeu)
+8. 🔜 Textures depuis les photos de rue (façades, talus), accotements goudronnés, glissières et panneaux, export glTF / Unreal
 9. Contrôle qualité automatique : règles de génie civil (pente, dévers ↔ courbure), cohérence entre sources, score de confiance par mètre, reconstruction droites/clothoïdes/paraboles, télémétrie d'une IA qui roule sur la piste
+10. Choix de zone libre : diagnostic de couverture des sources (LiDAR, ortho, Panoramax, BD TOPO) avant téléchargement, meilleure source par élément avec repli, harmonisation des couleurs entre sources ; textures améliorées par IA (agrandissement, retrait des ombres)
 
 ---
 
@@ -146,11 +155,16 @@ python fetch.py mnt      # 50 cm LiDAR HD terrain (~16 MB per km²)
 python fetch.py ortho    # 20 cm aerial imagery
 python fetch.py lidar    # corridor point cloud (~10 min, ~120 MB kept)
 python fetch.py far      # low-resolution relief and imagery over ~8 km (the horizon)
+python fetch.py mnh      # vegetation height (LiDAR HD) for the trees
+python fetch.py buildings  # BD TOPO buildings (footprint, heights)
+python fetch.py streetview # Panoramax 360° photos along the road
 python road_profile.py   # real road surface: elevation, crossfall, bridges
 python road_edges.py     # real carriageway edges: true width and centre
 python road_markings.py  # real markings: centre line and edge lines
+python trees.py          # real trees: position, height, crown, kind
 python build_track.py    # track geometry (road, markings, terrain, AC spawn points)
 python kn5_export.py --install "<assettocorsa folder>"   # complete AC track
+python streetview_sheet.py # "driver view" sheet every 250 m, to compare with the game
 ```
 
 `kn5_export.py` writes the `.kn5` directly (no Blender, no ksEditor any more),
@@ -170,6 +184,9 @@ Downloads resume where they stopped. Data goes to `data/<section-name>/`
 | Road profile | LiDAR cloud | 1 m stations; robust line z = z0 + c·t over ±2.5 m around the axis → elevation, crossfall, roughness. Bridge decks (class 17) take priority; axis flagged as suspect if crossfall > 12 % or rms > 12 cm. |
 | Carriageway edges | LiDAR + orthophoto + BD TOPO | Edge lines (LiDAR intensity peaks + white in the orthophoto) → edge = line + 0.3 m; hidden line mirrored about the centre marking; LiDAR intensity step within the terrain otherwise; BD TOPO as a guard rail. Median width 7.35 m (6.3-9 m) on the Route Napoléon. |
 | Markings | Orthophoto + LiDAR | Centre and edge lines followed metre by metre (white peak in the orthophoto + LiDAR intensity peak), split into continuous / dashed / absent stretches; dashes kept where they are seen, completed at the local spacing. White strips 2 cm above the asphalt. |
+| Trees | LiDAR HD canopy height + orthophoto | Tops = local maxima of the smoothed canopy height (window growing with height), crown radius read on the canopy, pine / broadleaf / shrub from height and orthophoto colour; crossed billboards (ksTree shader), textures generated in the orthophoto colours. ~50-120 trees/ha measured along the road. |
+| Buildings | BD TOPO | Footprint extruded from the ground to the eaves (altitude_minimale_toit), gable roof up to the real ridge on near-rectangular footprints, flat otherwise; roofs textured with the orthophoto (real colours), generic façades. |
+| Street photos | Panoramax (IGN, Etalab 2.0) | 360° photos of the road (IGN, April 2026, whole route) → "driver views" to compare with the game. Data kept out of Git. |
 | Smoothing | — | Despike (15 m median) then Gaussian sigma 6 m (elevation) / 10 m (crossfall): min vertical radius ~520 m, max deviation from LiDAR < 10 cm. |
 | AC track | — | `.kn5` written from Python (format checked against Kunos tracks), DXT1 DDS textures with mipmaps, `fast_lane.ai` AI line, minimap, cameras. Detailed terrain to 120 m, a coarse ring to ~300 m, then distant relief (RGE ALTI 25 m + 4 m ortho) out to ~8 km. |
 | Point cloud | LiDAR HD COPC | Tiles downloaded, cropped to the corridor (±40 m) and deleted; ground (2) and bridge decks (17) are kept. `--remote`: partial HTTP Range reads (slower, rate-limited by IGN). |
@@ -182,9 +199,10 @@ Downloads resume where they stopped. Data goes to `data/<section-name>/`
 4. ✅ Road + terrain mesh, FBX export through Blender
 5. ✅ ksEditor → drivable Assetto Corsa track (first drive on 2026-10-16): recognisable road, bumps smoothed, real width measured
 6. ✅ kn5 written directly (no more ksEditor), AI line, cameras, minimap, previews; real markings; wider terrain and distant relief (v0.2)
-7. 🔜 Vegetation (trees from the LiDAR), paved shoulders
-8. Buildings, signs, guardrails
+7. ✅ Trees (LiDAR), buildings (BD TOPO), Panoramax street photos (v0.3, to test in game)
+8. 🔜 Textures from the street photos (façades, banks), paved shoulders, guardrails and signs, glTF / Unreal export
 9. Automatic QA: road-design rules (grade, crossfall vs curvature), cross-source consistency, per-metre confidence score, line/clothoid/parabola reconstruction, telemetry from an AI driving the track
+10. Free area choice: source coverage diagnosis (LiDAR, ortho, Panoramax, BD TOPO) before downloading, best source per element with fallback, colour harmonisation between sources; AI-enhanced textures (upscaling, shadow removal)
 
 ---
 
@@ -194,3 +212,6 @@ Downloads resume where they stopped. Data goes to `data/<section-name>/`
   [Licence Ouverte Etalab 2.0](https://www.etalab.gouv.fr/licence-ouverte-open-licence/)
 - OpenStreetMap — © OpenStreetMap contributors,
   [ODbL](https://www.openstreetmap.org/copyright)
+- Panoramax — photos © IGN et contributeurs / IGN and contributors, licence indiquée par photo /
+  licence given per photo (Etalab 2.0 pour l'IGN / for IGN); non redistribuées ici / not
+  redistributed here

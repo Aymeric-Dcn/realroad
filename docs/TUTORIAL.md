@@ -29,7 +29,7 @@ pip install -r requirements.txt
 Dans `config.yaml` : points de départ/arrivée, numéro de route (`osm_ref_regex`)
 et section `track` (identifiant AC, titre, largeur, lissage, marquages…).
 
-### 2. Tout lancer (~20 min la première fois)
+### 2. Tout lancer (~30 min la première fois)
 
 ```powershell
 python realroad.py --install "C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"
@@ -43,6 +43,8 @@ Les étapes s'affichent une à une. À vérifier au passage (dans `data\<nom>\`)
 | `road_profile.png` | altitude, pentes, ponts |
 | `road_edges.png` | largeur mesurée vs BD TOPO, bords sur l'orthophoto |
 | `road_markings.png` | marquages détectés sur l'orthophoto |
+| `trees.png` | arbres détectés (carte + histogramme des hauteurs) |
+| `streetview_sheet.jpg` | la vraie route vue du conducteur, tous les 250 m (photos Panoramax) |
 
 En cas d'erreur, corriger puis reprendre à l'étape concernée :
 `python realroad.py --from road_edges --install "…"`.
@@ -70,6 +72,8 @@ La piste contient aussi l'AI line (adversaires IA, mode Track Day), la minimap
 | Le jeu plante au chargement à cause de l'IA | `python kn5_export.py --no-ai --install "…"` |
 | Terrain trop clair / trop sombre | `track.materials` dans `config.yaml` (ksAmbient, ksDiffuse) |
 | Fichier `.kn5` trop gros | `track.ortho_texture_px: 1024` |
+| Trop d'arbres / jeu qui rame | `trees: {max_trees: 20000}` ou `max_distance_m: 80` dans `config.yaml`, puis `python realroad.py --from trees --install "…"` |
+| Pas d'arbres / de bâtiments | ces étapes sont facultatives : relancer `python fetch.py mnh` / `python fetch.py buildings` |
 
 ### Ancienne méthode (Blender + ksEditor)
 
@@ -112,7 +116,7 @@ pip install -r requirements.txt
 In `config.yaml`: start/end points, road number (`osm_ref_regex`) and the
 `track` section (AC id, title, width, smoothing, markings…).
 
-### 2. Run everything (~20 min the first time)
+### 2. Run everything (~30 min the first time)
 
 ```powershell
 python realroad.py --install "C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"
@@ -126,6 +130,8 @@ Steps are shown one by one. Worth checking on the way (in `data\<name>\`):
 | `road_profile.png` | elevation, grades, bridges |
 | `road_edges.png` | measured width vs BD TOPO, edges on the orthophoto |
 | `road_markings.png` | detected markings on the orthophoto |
+| `trees.png` | detected trees (map + height histogram) |
+| `streetview_sheet.jpg` | the real road seen from the driver's seat every 250 m (Panoramax photos) |
 
 On an error, fix it and resume at that step:
 `python realroad.py --from road_edges --install "…"`.
@@ -153,6 +159,8 @@ The track also has an AI line (AI opponents, Track Day mode), a minimap
 | Game crashes on load because of the AI | `python kn5_export.py --no-ai --install "…"` |
 | Terrain too bright / too dark | `track.materials` in `config.yaml` (ksAmbient, ksDiffuse) |
 | `.kn5` file too big | `track.ortho_texture_px: 1024` |
+| Too many trees / low frame rate | `trees: {max_trees: 20000}` or `max_distance_m: 80` in `config.yaml`, then `python realroad.py --from trees --install "…"` |
+| No trees / buildings | these steps are optional: run `python fetch.py mnh` / `python fetch.py buildings` again |
 
 ### Old route (Blender + ksEditor)
 

@@ -1,74 +1,61 @@
-# État du projet / Project status — 16/10/2026
+# État du projet / Project status — 17/10/2026
 
 ## 🇫🇷
 
-**Fait**
-- Pipeline complet de la donnée ouverte à une piste Assetto Corsa, en une
-  commande (`realroad.py`) : tracé → relief → LiDAR → profil → bords réels →
-  marquages réels → maillage → `.kn5` (sans Blender ni ksEditor).
-- Route Napoléon (D6085) St-Vallier → Escragnolles, 17,4 km : v0.1 roulée
-  (route reconnaissable, voitures dans le bon sens, largeur mesurée cohérente).
-- v0.2 (pas encore roulée) :
-  - `.kn5` écrit en Python, format vérifié sur les pistes Kunos et sur le kn5 de ksEditor ;
-  - terrain corrigé : ksEditor mettait ksAmbient 0 / ksSpecular 0,8, d'où le blanc ;
-    valeurs reprises des pistes Kunos ;
-  - textures DDS avec mipmaps ;
-  - AI line, minimap, caméras de replay, vignettes ;
-  - marquages réels (axe + rives, continus / pointillés) ;
-  - terrain grossier jusqu'à ~300 m.
+**Fait et validé en jeu (v0.2)**
+- Pipeline complet en une commande (`realroad.py`), `.kn5` écrit directement (plus de Blender ni de ksEditor).
+- Route Napoléon (D6085) St-Vallier → Escragnolles, 17,4 km :
+  - route reconnaissable, largeur mesurée, marquages réels ;
+  - terrain jusqu'à 300 m et relief lointain (« le décor est super ») ;
+  - couleurs réglées le 16/10 au soir (« vraiment bien, de loin le paysage est très ressemblant ») ;
+  - bord de route refait : photo aérienne, raccord progressif, terrain découpé autour de la route.
 
-**À tester en jeu (pistes installées le 16/10)**
-| Piste (Content Manager) | Contenu |
-|---|---|
-| `realroad_rn_v2` | kn5 direct + IA + minimap + caméras |
-| `realroad_rn_v2_noai` | idem sans IA (si v2 plante au chargement) |
-| `realroad_rn_v3` | v2 + marquages réels |
+**Fait cette nuit, à tester (v0.3)** — demande trois téléchargements sur le PC :
+- **Arbres** (`fetch.py mnh` + `trees.py`) : hauteur de végétation LiDAR HD. Mesuré sur 3 zones du tracé :
+  50 à 120 arbres/ha, hauteur médiane 10 à 13 m, soit ~40 à 55 000 arbres à moins de 140 m de la route.
+  Billboards croisés (shader ksTree, comme Kunos), textures générées dans les couleurs de l'ortho.
+- **Bâtiments** (`fetch.py buildings`) : BD TOPO, avec hauteur à l'égout et au faîtage (champs vérifiés
+  sur le service IGN), toits texturés par l'ortho, façades génériques provençales.
+- **Photos de rue** (`fetch.py streetview` + `streetview_sheet.py`) : l'IGN a photographié toute la route
+  en 360° le 27/04/2026 (Panoramax, Etalab 2.0), 100 % du tracé à moins de 5 m. Planche « vue conducteur »
+  tous les 250 m pour comparer avec le jeu. Rien n'est mis dans Git.
 
-Le terrain étendu (~300 m) n'est dans aucune : il faut relancer
-`python realroad.py --from road_markings --install "…"` sur le PC (build_track
-a besoin de rasterio). Ensuite les pistes de test peuvent être supprimées.
-
-À regarder : couleur du terrain et de la route, marquages (scintillement au
-loin ?), minimap, IA (Track Day), caméras de replay.
-
-**Retours du 16/10 au soir** : terrain à 300 m et relief lointain validés en jeu
-(« le décor est super ») ; bord de route jugé laid → refait (photo aérienne,
-raccord progressif au terrain, terrain découpé autour de la route), à tester.
+À regarder en jeu : densité et allure des arbres (trop ? pas assez ? couleur ?), performances (images/s),
+bâtiments de Saint-Vallier, puis comparer avec `streetview_sheet.jpg`.
 
 **Limites connues**
-- Sous les arbres et dans la traversée de Saint-Vallier, les bords sont estimés.
-- Les accotements goudronnés au-delà des lignes sont traités comme de l'accotement.
-- Pas d'arbres en volume (l'orthophoto seule).
+- Arbres et bâtiments sans collision (on les traverse).
+- Façades génériques (une seule texture) ; arbres stylisés (4 modèles).
+- Sous les arbres et dans Saint-Vallier, bords de route estimés.
+- Accotements goudronnés au-delà des lignes traités comme de l'accotement.
 
-**Prochaines étapes proposées** : végétation depuis le LiDAR (classes 3-5),
-accotements goudronnés, puis contrôle qualité automatique.
+**Prochaines étapes proposées** : régler arbres et bâtiments d'après le premier essai ; textures tirées des
+photos Panoramax (façades, talus, murets) ; export glTF pour Unreal ; contrôle qualité automatique.
 
 ## 🇬🇧
 
-**Done**: full pipeline from open data to an Assetto Corsa track in one command
-(`realroad.py`), writing the `.kn5` directly (no Blender, no ksEditor). Route
-Napoléon v0.1 driven (recognisable road, right spawn direction, measured width
-looks right). v0.2, not driven yet:
-- the kn5 is written from Python;
-- terrain fix: ksEditor's ksAmbient 0 / ksSpecular 0.8 washed it out;
-- DDS textures with mipmaps;
-- AI line, minimap, replay cameras;
-- real markings;
-- coarse terrain to ~300 m.
+**Done and approved in game (v0.2)**:
+- one-command pipeline that writes the `.kn5` directly;
+- Route Napoléon with measured width and real markings;
+- terrain to 300 m and distant relief ("the scenery is great");
+- colours tuned on the evening of 16/10;
+- roadside redone.
 
-**To test in game**:
-- `realroad_rn_v2`: direct kn5 with AI;
-- `realroad_rn_v2_noai`: the same without AI;
-- `realroad_rn_v3`: v2 with real markings.
-
-The wider terrain needs a run on the PC (`python realroad.py --from road_markings --install "…"`).
-
-**Feedback 16/10 evening**: 300 m terrain and distant relief approved in game;
-roadside judged ugly → redone (orthophoto, smooth blend, terrain cut out), to test.
+**Done overnight, to test (v0.3)** — needs three downloads on the PC:
+- **trees** from the LiDAR HD canopy height: 50-120 trees/ha measured, ~40-55k trees within 140 m;
+  ksTree billboards with textures in the orthophoto colours;
+- **buildings** from BD TOPO, with eaves and ridge heights, orthophoto roofs and generic façades;
+- **street photos**: IGN shot the whole road in 360° on 27/04/2026 (Panoramax, Etalab 2.0); a driver-view
+  sheet every 250 m to compare with the game, kept out of Git.
 
 **Known limits**:
-- estimated edges under trees and through Saint-Vallier;
-- paved shoulders beyond the edge lines are treated as verge;
-- no 3D trees.
+- no collisions on trees and buildings;
+- generic façades and stylised trees;
+- estimated edges under trees and in Saint-Vallier;
+- paved shoulders treated as verge.
 
-**Next**: vegetation from the LiDAR, paved shoulders, automatic QA.
+**Next**:
+- tune trees and buildings after the first drive;
+- textures from the Panoramax photos;
+- glTF export for Unreal;
+- automatic QA.
