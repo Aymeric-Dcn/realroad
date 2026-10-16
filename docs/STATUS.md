@@ -3,41 +3,68 @@
 ## 🇫🇷
 
 **Fait**
-- Pipeline complet de la donnée ouverte à une piste Assetto Corsa roulable :
-  tracé → relief → LiDAR → profil de la chaussée → bords réels → maillage → FBX → kn5.
-- Route Napoléon (D6085) St-Vallier → Escragnolles, 17,4 km : testée en jeu,
-  route reconnaissable ; bosses parasites supprimées (rayon vertical mini ~520 m) ;
-  largeur réelle mesurée (médiane 7,35 m, 6,3–9 m).
+- Pipeline complet de la donnée ouverte à une piste Assetto Corsa, en une
+  commande (`realroad.py`) : tracé → relief → LiDAR → profil → bords réels →
+  marquages réels → maillage → `.kn5` (sans Blender ni ksEditor).
+- Route Napoléon (D6085) St-Vallier → Escragnolles, 17,4 km : v0.1 roulée
+  (route reconnaissable, voitures dans le bon sens, largeur mesurée cohérente).
+- v0.2 (pas encore roulée) :
+  - `.kn5` écrit en Python, format vérifié sur les pistes Kunos et sur le kn5 de ksEditor ;
+  - terrain corrigé : ksEditor mettait ksAmbient 0 / ksSpecular 0,8, d'où le blanc ;
+    valeurs reprises des pistes Kunos ;
+  - textures DDS avec mipmaps ;
+  - AI line, minimap, caméras de replay, vignettes ;
+  - marquages réels (axe + rives, continus / pointillés) ;
+  - terrain grossier jusqu'à ~300 m.
 
-**À tester en jeu**
-- La version avec largeur mesurée (`road_edges.py`, commit 049575b) n'a pas encore
-  été roulée : relancer `road_edges.py` → `build_track.py` → Blender → ksEditor.
-- Sens des voitures au départ : si elles sont à l'envers, `--spawn-flip` dans la commande Blender.
+**À tester en jeu (pistes installées le 16/10)**
+| Piste (Content Manager) | Contenu |
+|---|---|
+| `realroad_rn_v2` | kn5 direct + IA + minimap + caméras |
+| `realroad_rn_v2_noai` | idem sans IA (si v2 plante au chargement) |
+| `realroad_rn_v3` | v2 + marquages réels |
+
+Le terrain étendu (~300 m) n'est dans aucune : il faut relancer
+`python realroad.py --from road_markings --install "…"` sur le PC (build_track
+a besoin de rasterio). Ensuite les pistes de test peuvent être supprimées.
+
+À regarder : couleur du terrain et de la route, marquages (scintillement au
+loin ?), minimap, IA (Track Day), caméras de replay.
 
 **Limites connues**
-- **Textures du terrain blanches / délavées en jeu** (voir captures) : la route est
-  correcte, mais l'orthophoto du terrain ne s'affiche pas. Piste : réglages des
-  matériaux dans ksEditor (shader, ksAmbient/ksDiffuse) ou chargement des textures.
-- Sous les arbres et dans la traversée de Saint-Vallier, les bords sont estimés
-  (pas de ligne de rive visible) : plausibles mais moins précis.
+- Sous les arbres et dans la traversée de Saint-Vallier, les bords sont estimés.
 - Les accotements goudronnés au-delà des lignes sont traités comme de l'accotement.
-- Étape manuelle : ksEditor (Open FBX → Save KN5 → track).
+- Au-delà de ~300 m, rien (pas de relief lointain à l'horizon).
+- Pas d'arbres en volume (l'orthophoto seule).
 
-**Prochaine étape proposée** : corriger les textures du terrain, puis écrire le `.kn5` directement depuis Python (format
-documenté par la communauté) pour supprimer ksEditor, puis AI line, caméras, carte.
+**Prochaines étapes proposées** : végétation depuis le LiDAR (classes 3-5),
+relief lointain (RGE ALTI + ortho basse résolution sur ~10 km), accotements
+goudronnés, puis contrôle qualité automatique.
 
 ## 🇬🇧
 
-**Done**: full pipeline from open data to a drivable Assetto Corsa track. Route
-Napoléon section tested in game: recognisable road, spurious bumps removed, real
-width measured (median 7.35 m, 6.3-9 m).
+**Done**: full pipeline from open data to an Assetto Corsa track in one command
+(`realroad.py`), writing the `.kn5` directly (no Blender, no ksEditor). Route
+Napoléon v0.1 driven (recognisable road, right spawn direction, measured width
+looks right). v0.2, not driven yet:
+- the kn5 is written from Python;
+- terrain fix: ksEditor's ksAmbient 0 / ksSpecular 0.8 washed it out;
+- DDS textures with mipmaps;
+- AI line, minimap, replay cameras;
+- real markings;
+- coarse terrain to ~300 m.
 
-**To test in game**: the measured-width build (`road_edges.py`, commit 049575b);
-spawn direction (`--spawn-flip` if cars face backwards).
+**To test in game**:
+- `realroad_rn_v2`: direct kn5 with AI;
+- `realroad_rn_v2_noai`: the same without AI;
+- `realroad_rn_v3`: v2 with real markings.
 
-**Known limits**: terrain textures render white/washed out in game (material
-settings or texture loading in ksEditor); estimated edges under trees and through Saint-Vallier; paved
-shoulders beyond the edge lines treated as verge; manual ksEditor step.
+The wider terrain needs a run on the PC (`python realroad.py --from road_markings --install "…"`).
 
-**Next**: fix the terrain textures, then write the `.kn5` directly from Python to drop ksEditor, then AI line,
-cameras, map.
+**Known limits**:
+- estimated edges under trees and through Saint-Vallier;
+- paved shoulders beyond the edge lines are treated as verge;
+- nothing beyond ~300 m;
+- no 3D trees.
+
+**Next**: vegetation from the LiDAR, distant relief, paved shoulders, automatic QA.
