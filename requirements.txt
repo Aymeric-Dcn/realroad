@@ -4,6 +4,7 @@ numpy
 pyproj
 shapely>=2.0
 networkx
+scipy
 laspy[lazrs]>=2.4
 rasterio
 matplotlib
