@@ -67,9 +67,9 @@ def http_get(url, params=None, stream=False, retries=4):
         wait = 3 * 2 ** i
         if i == retries - 1:
             break
-        print(f"  ! {msg} — nouvel essai dans {wait}s")
+        print(f"  ! {msg} — retrying in {wait}s")
         time.sleep(wait)
-    raise RuntimeError(f"Échec : {url}\n  {msg}")
+    raise RuntimeError(f"Failed: {url}\n  {msg}")
 
 
 def download(url, dest):
@@ -82,7 +82,7 @@ def download(url, dest):
     r = http_get(url, stream=True)
     ctype = r.headers.get("Content-Type", "")
     if "xml" in ctype or "html" in ctype:
-        raise RuntimeError(f"Le serveur a renvoyé une erreur au lieu du fichier :\n  {r.text[:800]}")
+        raise RuntimeError(f"The server returned an error instead of the file:\n  {r.text[:800]}")
     total = int(r.headers.get("Content-Length", 0))
     done = 0
     with open(tmp, "wb") as f:
@@ -90,7 +90,7 @@ def download(url, dest):
             f.write(chunk)
             done += len(chunk)
             if total:
-                print(f"\r    {done / 1e6:7.0f} / {total / 1e6:.0f} Mo", end="", flush=True)
+                print(f"\r    {done / 1e6:7.0f} / {total / 1e6:.0f} MB", end="", flush=True)
     if total:
         print()
     tmp.replace(dest)
@@ -109,7 +109,7 @@ def save_geojson(path, geom, crs_epsg, props=None):
 def load_route(cfg):
     p = cfg["_dir"] / "route_l93.geojson"
     if not p.exists():
-        sys.exit("Pas de tracé : lance d'abord `python fetch.py osm`.")
+        sys.exit("No centreline yet: run `python fetch.py osm` first.")
     fc = json.loads(p.read_text(encoding="utf-8"))
     return shape(fc["features"][0]["geometry"])
 
@@ -123,12 +123,12 @@ def corridor_area(cfg, route):
 
 
 # ---------------------------------------------------------- road centreline
-def route_from_lines(lines, start_xy, end_xy, label="les tronçons", gap_m=60):
+def route_from_lines(lines, start_xy, end_xy, label="the segments", gap_m=60):
     """Shortest path over a set of polylines (Lambert-93) between the vertices
     closest to the start and end points. Polylines are joined wherever their
     vertices coincide (to within 10 cm)."""
     if not lines:
-        raise RuntimeError(f"Aucun tronçon trouvé dans {label} : vérifie osm_ref_regex et les points.")
+        raise RuntimeError(f"No road segment found in {label}: check osm_ref_regex and the start/end points.")
     key = lambda c: (round(c[0], 1), round(c[1], 1))
     G = nx.Graph()
     for coords in lines:
@@ -151,7 +151,7 @@ def route_from_lines(lines, start_xy, end_xy, label="les tronçons", gap_m=60):
         for d, a, b in sorted(bridges):
             if not nx.has_path(G, a, b):
                 G.add_edge(a, b, length=d)
-                print(f"  · trou de {d:.0f} m recousu (rond-point / carrefour sans numéro)")
+                print(f"  · stitched a {d:.0f} m gap (unnumbered roundabout / junction)")
 
     def nearest(p):
         n = min(G.nodes, key=lambda k: math.dist(k, p))
@@ -159,16 +159,16 @@ def route_from_lines(lines, start_xy, end_xy, label="les tronçons", gap_m=60):
 
     s, ds = nearest(start_xy)
     e, de = nearest(end_xy)
-    for name, d in (("départ", ds), ("arrivée", de)):
+    for name, d in (("start", ds), ("end", de)):
         if d > 250:
-            print(f"  ! Le point d'{name} est à {d:.0f} m de la route : vérifie-le.")
+            print(f"  ! The {name} point is {d:.0f} m from the road: check it.")
     try:
         path = nx.shortest_path(G, s, e, weight="length")
     except nx.NetworkXNoPath:
         raise RuntimeError(
-            f"Dans {label}, les tronçons ne sont pas reliés entre départ et arrivée "
-            "(trou dans le tracé ou numéro de route différent sur une portion). "
-            "Élargis osm_ref_regex ou déplace les points."
+            f"In {label}, the segments do not connect start and end "
+            "(gap in the line, or a different road number on some stretch). "
+            "Widen osm_ref_regex or move the points."
         )
     return LineString(path)
 
@@ -186,9 +186,9 @@ def overpass(query, rounds=2):
                 last = type(e).__name__
             print(f"  ! {url.split('/')[2]} : {last}")
         if rnd < rounds - 1:
-            print("  … tous occupés, nouvel essai dans 20 s")
+            print("  … all busy, retrying in 20 s")
             time.sleep(20)
-    raise RuntimeError(f"Overpass indisponible ({last})")
+    raise RuntimeError(f"Overpass unavailable ({last})")
 
 
 def lines_from_osm(cfg, start_ll, end_ll):
@@ -224,7 +224,7 @@ def lines_from_ign(cfg, start_ll, end_ll):
         g = _to_l93_if_needed(shape(f["geometry"]))
         parts = g.geoms if g.geom_type == "MultiLineString" else [g]
         lines += [[(c[0], c[1]) for c in p.coords] for p in parts]
-    print(f"  {len(feats)} tronçons BD TOPO dans la zone, {len(lines)} portent le bon numéro.")
+    print(f"  {len(feats)} BD TOPO segments in the area, {len(lines)} carry the road number.")
     return lines
 
 
@@ -235,22 +235,22 @@ def cmd_osm(cfg):
     source = cfg.get("road_source", "auto")
     route = None
     if source in ("auto", "osm"):
-        print("Requête OpenStreetMap…")
+        print("Querying OpenStreetMap…")
         try:
             route = route_from_lines(lines_from_osm(cfg, start_ll, end_ll), start_xy, end_xy, "OSM")
             src = "OpenStreetMap"
         except RuntimeError as err:
             if source == "osm":
                 raise
-            print(f"  ! OSM : {err}\n  → je passe sur la BD TOPO de l'IGN")
+            print(f"  ! OSM: {err}\n  → falling back to IGN BD TOPO")
     if route is None:
-        print("Requête BD TOPO (IGN)…")
-        route = route_from_lines(lines_from_ign(cfg, start_ll, end_ll), start_xy, end_xy, "la BD TOPO")
+        print("Querying BD TOPO (IGN)…")
+        route = route_from_lines(lines_from_ign(cfg, start_ll, end_ll), start_xy, end_xy, "BD TOPO")
         src = "BD TOPO IGN"
     save_geojson(cfg["_dir"] / "route_l93.geojson", route, 2154, {"source": src})
     save_geojson(cfg["_dir"] / "route_wgs84.geojson", shp_transform(TO_WGS.transform, route), 4326, {"source": src})
-    print(f"Tracé ({src}) : {route.length / 1000:.2f} km, {len(route.coords)} points.")
-    print(f"→ Vérifie-le en glissant {cfg['_dir'] / 'route_wgs84.geojson'} sur https://geojson.io")
+    print(f"Centreline ({src}): {route.length / 1000:.2f} km, {len(route.coords)} points.")
+    print(f"→ Check it by dropping {cfg['_dir'] / 'route_wgs84.geojson'} on https://geojson.io")
 
 
 # ------------------------------------------------------------------ IGN tiles
@@ -304,7 +304,7 @@ def wfs_features(layer, area):
         try:
             page = r.json().get("features", [])
         except ValueError:
-            raise RuntimeError(f"Réponse WFS inattendue pour {layer} : {r.text[:1500]}")
+            raise RuntimeError(f"Unexpected WFS response for {layer}: {r.text[:1500]}")
         feats += page
         if len(page) < page_size:
             break
@@ -322,9 +322,9 @@ def cmd_mnt(cfg):
     route = load_route(cfg)
     tiles = lidar_tiles(terrain_area(cfg, route), "url_mnt")
     if not tiles:
-        sys.exit("Aucune dalle MNT : zone pas encore diffusée ? Vérifie sur macarte.ign.fr.")
+        sys.exit("No DTM tile found: area not published yet? Check macarte.ign.fr.")
     (cfg["_dir"] / "mnt_tiles.json").write_text(json.dumps(tiles, indent=1), encoding="utf-8")
-    print(f"{len(tiles)} dalles MNT à récupérer.")
+    print(f"{len(tiles)} DTM tiles to fetch.")
     for i, t in enumerate(tiles, 1):
         dest = cfg["_dir"] / "mnt" / t["name"]
         print(f"  [{i}/{len(tiles)}] {t['name']}")
@@ -387,7 +387,7 @@ def crop_copc_remote(url, dst, area, classes, tile_bounds, cell_m=150):
                 if len(pts):
                     w.write_points(pts)
                     kept += len(pts)
-                print(f"\r    case {k}/{len(cells)} — {kept:,} points".replace(",", " "), end="", flush=True)
+                print(f"\r    cell {k}/{len(cells)} — {kept:,} points", end="", flush=True)
     print()
     return kept
 
@@ -413,18 +413,18 @@ def cmd_lidar(cfg, yes=False, full=False):
     area = corridor_area(cfg, route)
     tiles = lidar_tiles(area, "url_npl")
     if not tiles:
-        sys.exit("Aucune dalle LiDAR : zone pas encore diffusée ? Vérifie sur macarte.ign.fr.")
+        sys.exit("No LiDAR tile found: area not published yet? Check macarte.ign.fr.")
     (cfg["_dir"] / "lidar_tiles.json").write_text(json.dumps(tiles, indent=1), encoding="utf-8")
     crop_dir = cfg["_dir"] / "lidar"
     crop_dir.mkdir(parents=True, exist_ok=True)
     out_name = lambda t: t["name"].replace(".copc.laz", ".laz")
     todo = [t for t in tiles if not (crop_dir / out_name(t)).exists()
             and not (crop_dir / (out_name(t) + ".empty")).exists()]
-    print(f"{len(tiles)} dalles LiDAR touchent le couloir (±{cfg['corridor_m']} m), "
-          f"{len(todo)} restent à traiter.")
+    print(f"{len(tiles)} LiDAR tiles touch the corridor (±{cfg['corridor_m']} m), "
+          f"{len(todo)} left to process.")
     if full and todo:
-        print(f"Mode dalles entières : ~{len(todo)} Go à télécharger (0,5 à 2 Go par dalle).")
-        if not yes and input("Continuer ? [o/N] ").strip().lower() not in ("o", "oui", "y"):
+        print(f"Whole-tile mode: ~{len(todo)} GB to download (0.5 to 2 GB per tile).")
+        if not yes and input("Continue? [y/N] ").strip().lower() not in ("y", "yes", "o", "oui"):
             return
     classes = cfg["lidar_classes"]
     for i, t in enumerate(todo, 1):
@@ -437,9 +437,9 @@ def cmd_lidar(cfg, yes=False, full=False):
                 n = crop_copc_remote(t["url"], tmp, area, classes, t["bounds"])
             except Exception as e:  # no Range support, laspy too old…
                 tmp.unlink(missing_ok=True)
-                sys.exit(f"\n    ! Lecture COPC à distance impossible ({type(e).__name__}: {e})\n"
-                         "    Envoie-moi ce message. En attendant : `python fetch.py lidar --full`\n"
-                         "    télécharge les dalles entières (~1 Go chacune) et marche toujours.")
+                sys.exit(f"\n    ! Remote COPC read failed ({type(e).__name__}: {e})\n"
+                         "    Meanwhile, `python fetch.py lidar --full` downloads whole tiles\n"
+                         "    (~1 GB each) and always works.")
         if full:
             raw = cfg["_dir"] / "lidar_raw" / t["name"]
             download(t["url"], raw)
@@ -452,7 +452,7 @@ def cmd_lidar(cfg, yes=False, full=False):
         else:
             tmp.replace(dst)
         mb = dst.stat().st_size / 1e6 if dst.exists() else 0
-        print(f"    → {n:,} points gardés, {mb:.1f} Mo, {time.time() - t0:.0f} s".replace(",", " "))
+        print(f"    → {n:,} points kept, {mb:.1f} MB, {time.time() - t0:.0f} s")
 
 
 # ------------------------------------------------------------------- ortho
@@ -486,7 +486,7 @@ def cmd_ortho(cfg, px=2000):
     out = cfg["_dir"] / "ortho"
     out.mkdir(exist_ok=True)
     prj = CRS.from_epsg(2154).to_wkt("WKT1_ESRI")
-    print(f"{len(cells)} images d'ortho ({px} px, {res * px:.0f} m de côté).")
+    print(f"{len(cells)} ortho images ({px} px, {res * px:.0f} m per side).")
     for i, c in enumerate(cells, 1):
         name = f"ortho_{int(c[0])}_{int(c[1])}"
         jpg = out / f"{name}.jpg"
@@ -499,7 +499,7 @@ def cmd_ortho(cfg, px=2000):
             "FORMAT": "image/jpeg",
         })
         if not r.headers.get("Content-Type", "").startswith("image"):
-            raise RuntimeError(f"Réponse WMS inattendue : {r.text[:300]}")
+            raise RuntimeError(f"Unexpected WMS response: {r.text[:300]}")
         jpg.write_bytes(r.content)
         (out / f"{name}.jgw").write_text(world_file(c, px))
         (out / f"{name}.prj").write_text(prj)
@@ -511,9 +511,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("step", choices=["osm", "mnt", "ortho", "lidar", "all"])
     ap.add_argument("-c", "--config", default="config.yaml")
-    ap.add_argument("-y", "--yes", action="store_true", help="ne pas demander confirmation")
+    ap.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")
     ap.add_argument("--full", action="store_true",
-                    help="lidar : télécharger les dalles entières au lieu de la lecture COPC partielle")
+                    help="lidar: download whole tiles instead of partial COPC reads")
     a = ap.parse_args()
     cfg = load_cfg(a.config)
     if a.step in ("osm", "all"):

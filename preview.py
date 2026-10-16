@@ -87,7 +87,7 @@ def heading_curvature(xs, ys, step, window_m=24.0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-c", "--config", default="config.yaml")
-    ap.add_argument("--step", type=float, default=2.0, help="pas d'échantillonnage (m)")
+    ap.add_argument("--step", type=float, default=2.0, help="sampling step (m)")
     a = ap.parse_args()
     cfg = load_cfg(a.config)
     route = load_route(cfg)
@@ -99,15 +99,15 @@ def main():
     z = MntSampler(files).sample(xs, ys)
     missing = np.isnan(z).mean()
     if missing > 0:
-        print(f"! {missing:.1%} du tracé sans altitude (dalle manquante ?), interpolé.")
+        print(f"! {missing:.1%} of the line has no elevation (missing tile?), interpolated.")
         ok = ~np.isnan(z)
         z = np.interp(d, d[ok], z[ok])
 
     z_raw = z
     z, bridges = fix_bridges(d, z, a.step)
     for s0, s1, depth in bridges:
-        print(f"  · pont / ouvrage probable km {s0 / 1000:.2f} "
-              f"({s1 - s0 + a.step:.0f} m, creux de {depth:.1f} m dans le MNT) → corrigé")
+        print(f"  · likely bridge / structure at km {s0 / 1000:.2f} "
+              f"({s1 - s0 + a.step:.0f} m, {depth:.1f} m dip in the DTM) → fixed")
     zs = smooth(z, int(20 / a.step))  # ~20 m smoothing for the grade
     slope = np.gradient(zs, a.step) * 100
     k = np.abs(heading_curvature(xs, ys, a.step))
@@ -115,15 +115,15 @@ def main():
     np.divide(1.0, k, out=radius, where=k > 1e-4)
 
     stats = {
-        "longueur_km": round(route.length / 1000, 2),
-        "alt_min_m": round(float(z.min()), 1),
-        "alt_max_m": round(float(z.max()), 1),
-        "denivele_positif_m": round(float(np.clip(np.diff(zs), 0, None).sum()), 0),
-        "pente_max_montee_pct": round(float(slope.max()), 1),
-        "pente_max_descente_pct": round(float(slope.min()), 1),
-        "virages_rayon_<_30m": int(np.sum(np.diff((radius < 30).astype(int)) == 1)),
-        "virages_rayon_<_60m": int(np.sum(np.diff((radius < 60).astype(int)) == 1)),
-        "ponts_corriges": len(bridges),
+        "length_km": round(route.length / 1000, 2),
+        "elev_min_m": round(float(z.min()), 1),
+        "elev_max_m": round(float(z.max()), 1),
+        "total_climb_m": round(float(np.clip(np.diff(zs), 0, None).sum()), 0),
+        "max_uphill_grade_pct": round(float(slope.max()), 1),
+        "max_downhill_grade_pct": round(float(slope.min()), 1),
+        "curves_radius_lt_30m": int(np.sum(np.diff((radius < 30).astype(int)) == 1)),
+        "curves_radius_lt_60m": int(np.sum(np.diff((radius < 60).astype(int)) == 1)),
+        "bridges_fixed": len(bridges),
     }
     print(json.dumps(stats, indent=1, ensure_ascii=False))
     (cfg["_dir"] / "stats.json").write_text(json.dumps(stats, indent=1, ensure_ascii=False), encoding="utf-8")
@@ -136,28 +136,28 @@ def main():
     fig = plt.figure(figsize=(14, 9))
     ax_map = fig.add_subplot(1, 3, 1)
     sc = ax_map.scatter(xs, ys, c=z, s=2, cmap="terrain")
-    ax_map.plot(xs[0], ys[0], "go", label="départ")
-    ax_map.plot(xs[-1], ys[-1], "ro", label="arrivée")
+    ax_map.plot(xs[0], ys[0], "go", label="start")
+    ax_map.plot(xs[-1], ys[-1], "ro", label="end")
     ax_map.set_aspect("equal")
-    ax_map.set_title("Tracé (couleur = altitude)")
+    ax_map.set_title("Centreline (colour = elevation)")
     ax_map.legend(loc="best")
     ax_map.tick_params(labelsize=7)
     fig.colorbar(sc, ax=ax_map, shrink=0.6, label="m")
 
     km = d / 1000
     ax1 = fig.add_subplot(3, 3, (2, 3))
-    ax1.plot(km, z_raw, lw=0.8, color="0.7", label="MNT brut")
-    ax1.plot(km, z, lw=1.2, color="tab:blue", label="corrigé (ponts)")
+    ax1.plot(km, z_raw, lw=0.8, color="0.7", label="raw DTM")
+    ax1.plot(km, z, lw=1.2, color="tab:blue", label="bridges fixed")
     ax1.legend(loc="lower right", fontsize=8)
-    ax1.set_ylabel("altitude (m)")
-    ax1.set_title(f"{cfg['name']} — {stats['longueur_km']} km")
+    ax1.set_ylabel("elevation (m)")
+    ax1.set_title(f"{cfg['name']} — {stats['length_km']} km")
     ax2 = fig.add_subplot(3, 3, (5, 6), sharex=ax1)
     ax2.fill_between(km, slope, 0, where=slope >= 0, color="tab:red", alpha=0.6)
     ax2.fill_between(km, slope, 0, where=slope < 0, color="tab:blue", alpha=0.6)
-    ax2.set_ylabel("pente (%)")
+    ax2.set_ylabel("grade (%)")
     ax3 = fig.add_subplot(3, 3, (8, 9), sharex=ax1)
     ax3.plot(km, np.clip(radius, 0, 300), lw=0.8, color="tab:purple")
-    ax3.set_ylabel("rayon virage (m)")
+    ax3.set_ylabel("curve radius (m)")
     ax3.set_ylim(0, 300)
     ax3.set_xlabel("distance (km)")
     for ax in (ax1, ax2, ax3):
