@@ -68,8 +68,7 @@ Copy-Item -Recurse -Force "data\<nom>\track_build\ac_track\<id>" "C:\Program Fil
 
 Content Manager → **Drive → Quick Drive** → choisir la piste → mode **Practice**.
 
-<!-- captures : en jeu → docs/img/ingame/01.jpg, 02.jpg…
-![En jeu](img/ingame/01.jpg) -->
+![En jeu](img/ingame/01-start.jpg)
 
 ### Problèmes rencontrés
 
@@ -147,8 +146,7 @@ Copy-Item -Recurse -Force "data\<name>\track_build\ac_track\<id>" "C:\Program Fi
 
 Content Manager → **Drive → Quick Drive** → pick the track → **Practice** mode.
 
-<!-- screenshots: in game → docs/img/ingame/01.jpg, 02.jpg…
-![In game](img/ingame/01.jpg) -->
+![In game](img/ingame/01-start.jpg)
 
 ### Troubleshooting
 

@@ -8,9 +8,11 @@ automatically from open data.
 
 Auteur / Author : **Aymeric Duchene**
 
-<!-- In-game screenshots: drop them in docs/img/ingame/ and uncomment.
-![En jeu / In game](docs/img/ingame/01.jpg)
--->
+| En jeu — départ de Saint-Vallier / In game — leaving Saint-Vallier | Après l'épingle / After the hairpin |
+|---|---|
+| ![start](docs/img/ingame/01-start.jpg) | ![hairpin](docs/img/ingame/02-after-hairpin.jpg) |
+
+*Premier essai (v0.1) : géométrie réelle, textures du terrain encore à régler. / First drive (v0.1): real geometry, terrain textures still to fix.*
 
 ![Bords mesurés / Measured edges](docs/img/edges_overlay.png)
 
