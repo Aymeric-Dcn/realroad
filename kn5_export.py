@@ -37,8 +37,10 @@ MATERIALS = {
     # ksPerPixel values in the range Kunos uses for grass/asphalt. The orthophoto
     # already contains light and shade, so mostly ambient and no specular:
     # ksEditor's defaults (ambient 0, diffuse 0.8, specular 0.8) washed it out.
-    "terrain": {"ksAmbient": 0.45, "ksDiffuse": 0.35, "ksSpecular": 0.0, "ksSpecularEXP": 1.0},
-    "road": {"ksAmbient": 0.35, "ksDiffuse": 0.45, "ksSpecular": 0.12, "ksSpecularEXP": 12.0},
+    # First drive of v0.2: terrain at 0.45/0.35 still looked overexposed next to the
+    # distant relief (the photo is already "lit"), so lower.
+    "terrain": {"ksAmbient": 0.28, "ksDiffuse": 0.22, "ksSpecular": 0.0, "ksSpecularEXP": 1.0},
+    "road": {"ksAmbient": 0.30, "ksDiffuse": 0.35, "ksSpecular": 0.12, "ksSpecularEXP": 12.0},
     "verge": {"ksAmbient": 0.40, "ksDiffuse": 0.40, "ksSpecular": 0.0, "ksSpecularEXP": 1.0},
     "marking": {"ksAmbient": 0.40, "ksDiffuse": 0.45, "ksSpecular": 0.15, "ksSpecularEXP": 20.0},
 }
