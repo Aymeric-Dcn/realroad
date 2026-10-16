@@ -27,6 +27,7 @@ import shutil
 from pathlib import Path
 
 import numpy as np
+from scipy.ndimage import gaussian_filter1d, median_filter
 from scipy.spatial import cKDTree
 
 from fetch import load_cfg
@@ -42,8 +43,11 @@ DEFAULTS = {
     "verge_m": 2.5,
     "terrain_half_width_m": 120.0,
     "terrain_grid_m": 2.5,
-    "z_smooth_m": 5.0,
-    "crossfall_smooth_m": 15.0,
+    "z_sigma_m": 6.0,
+    "crossfall_sigma_m": 10.0,
+    "despike_window_m": 15.0,
+    "z_despike_m": 0.06,
+    "crossfall_despike_pct": 3.0,
     "crossfall_clip_pct": 10.0,
     "road_chunk_m": 200.0,
     "texture_repeat_m": 13.0,
@@ -96,6 +100,34 @@ def load_profile(path):
     ok = ~bad
     cf = np.interp(d["s_m"], d["s_m"][ok], cf[ok]) if ok.sum() > 1 else np.zeros_like(cf)
     return d["s_m"], d["x"], d["y"], d["z_filled_m"], cf
+
+
+def despike(s, v, window, tol):
+    """Replace values further than `tol` from the local median (window samples)
+    by linear interpolation: removes isolated holes/spikes, keeps real shape."""
+    med = median_filter(v, size=max(3, window | 1), mode="nearest")
+    bad = np.abs(v - med) > tol
+    if bad.any() and (~bad).sum() > 1:
+        v = v.copy()
+        v[bad] = np.interp(s[bad], s[~bad], v[~bad])
+    return v, int(bad.sum())
+
+
+def smooth_profile(s, z, cf_pct, p):
+    """Elevation and crossfall as the car will feel them: despike, then a
+    Gaussian low-pass (a moving average leaves small steps a car feels)."""
+    step = float(np.median(np.diff(s)))
+    win = int(p["despike_window_m"] / step)
+    zd, nz = despike(s, z, win, p["z_despike_m"])
+    cd, nc = despike(s, cf_pct, win, p["crossfall_despike_pct"])
+    zs = gaussian_filter1d(zd, p["z_sigma_m"] / step, mode="nearest")
+    cs = gaussian_filter1d(cd, p["crossfall_sigma_m"] / step, mode="nearest")
+    cs = np.clip(cs, -p["crossfall_clip_pct"], p["crossfall_clip_pct"]) / 100
+    curv = np.abs(np.gradient(np.gradient(zs, step), step))
+    print(f"  profile: {nz} elevation and {nc} crossfall spikes removed; "
+          f"min vertical radius {1 / max(curv.max(), 1e-9):.0f} m, "
+          f"max deviation from LiDAR {100 * np.abs(zs - z).max():.1f} cm")
+    return zs, cs
 
 
 def frames(x, y, step, window_m=10.0):
@@ -175,9 +207,7 @@ def smooth_2d(a, r):
 def build_road(s, x, y, z, cf_pct, p):
     step = float(np.median(np.diff(s)))
     tx, ty, nx, ny = frames(x, y, step)
-    zs = smooth(z, max(1, int(p["z_smooth_m"] / step)))
-    c = np.clip(smooth(cf_pct, max(1, int(p["crossfall_smooth_m"] / step))),
-                -p["crossfall_clip_pct"], p["crossfall_clip_pct"]) / 100
+    zs, c = smooth_profile(s, z, cf_pct, p)
     half = p["road_width_m"] / 2
     # columns go from right (t = -half) to left (t = +half)
     t = np.linspace(-half, half, p["road_cross_vertices"])
@@ -285,7 +315,7 @@ def dummies(s, x, y, frame, p):
         k = int(np.clip(np.searchsorted(s, sv), 0, len(s) - 1))
         px = x[k] + t * frame["nx"][k]
         py = y[k] + t * frame["ny"][k]
-        pz = frame["z"][k] + frame["c"][k] * t + 0.3
+        pz = frame["z"][k] + frame["c"][k] * t + 1.0  # 1-2 m above the road (AC convention)
         return {"name": name, "pos": [px, py, pz], "fwd": [float(frame["tx"][k]), float(frame["ty"][k]), 0.0]}
 
     lane = -half / 2  # centre of the right-hand lane

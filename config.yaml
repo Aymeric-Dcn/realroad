@@ -40,5 +40,6 @@ track:
   verge_m: 2.5               # verge strip from the road edge to the terrain
   terrain_half_width_m: 120  # terrain kept on each side of the road
   terrain_grid_m: 2.5        # terrain mesh resolution
-  z_smooth_m: 5              # smoothing of the LiDAR elevation (removes 1 m noise)
-  crossfall_smooth_m: 15
+  z_sigma_m: 6               # Gaussian smoothing of the LiDAR elevation (bumps vs detail)
+  crossfall_sigma_m: 10      # Gaussian smoothing of the crossfall
+  z_despike_m: 0.06          # isolated elevation spikes larger than this are removed

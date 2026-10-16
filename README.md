@@ -1,6 +1,6 @@
 # realroad
 
-**🇫🇷 [Français](#-français) · 🇬🇧 [English](#-english)**
+**🇫🇷 [Français](#-français) · 🇬🇧 [English](#-english) · 📘 [Tutoriel / Tutorial](docs/TUTORIAL.md)**
 
 Routes réelles → pistes de simulation, générées automatiquement à partir de
 données ouvertes. / Real-world roads → driving-sim tracks, generated
@@ -70,8 +70,8 @@ Les données vont dans `data/<nom-du-tronçon>/` (ignoré par Git).
 1. ✅ Tracé, relief, aperçu
 2. ✅ Nuage de points LiDAR du couloir
 3. ✅ Profil en long et en travers depuis le LiDAR (altitude, dévers, ponts)
-4. 🔄 Maillage route + terrain, export FBX via Blender
-5. Export FBX → ksEditor → piste Assetto Corsa (surfaces, AI line, départs)
+4. ✅ Maillage route + terrain, export FBX via Blender
+5. ✅ ksEditor → piste Assetto Corsa roulable (premier essai le 16/10/2026) ; reste : AI line, caméras, carte, kn5 sans ksEditor
 6. Végétation, bâtiments, panneaux
 7. Contrôle qualité automatique : règles de génie civil (pente, dévers ↔ courbure), cohérence entre sources, score de confiance par mètre, reconstruction droites/clothoïdes/paraboles, télémétrie d'une IA qui roule sur la piste
 
@@ -136,8 +136,8 @@ to `data/<section-name>/` (git-ignored).
 1. ✅ Centreline, terrain, preview
 2. ✅ Corridor LiDAR point cloud
 3. ✅ Longitudinal and cross profiles from LiDAR (elevation, crossfall, bridges)
-4. 🔄 Road + terrain mesh, FBX export through Blender
-5. FBX export → ksEditor → Assetto Corsa track (surfaces, AI line, spawns)
+4. ✅ Road + terrain mesh, FBX export through Blender
+5. ✅ ksEditor → drivable Assetto Corsa track (first drive on 2026-10-16); to do: AI line, cameras, map, kn5 without ksEditor
 6. Vegetation, buildings, signs
 7. Automatic QA: road-design rules (grade, crossfall vs curvature), cross-source consistency, per-metre confidence score, line/clothoid/parabola reconstruction, telemetry from an AI driving the track
 
