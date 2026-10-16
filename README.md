@@ -42,7 +42,7 @@ python fetch.py osm      # tracé (OpenStreetMap, sinon BD TOPO IGN)
 python fetch.py mnt      # relief LiDAR HD 50 cm (~16 Mo par km²)
 python preview.py        # profil, pentes, virages, ponts → preview.png
 python fetch.py ortho    # photos aériennes 20 cm
-python fetch.py lidar    # nuage de points du couloir (lecture COPC partielle)
+python fetch.py lidar    # nuage de points du couloir (~10 min, ~120 Mo gardés)
 ```
 
 Toutes les commandes peuvent être relancées : ce qui est déjà là est sauté.
@@ -55,7 +55,7 @@ Les données vont dans `data/<nom-du-tronçon>/` (ignoré par Git).
 | Tracé | OSM (Overpass) ou BD TOPO | Plus court chemin entre départ et arrivée sur les tronçons portant le numéro de route ; les ronds-points sans numéro sont recousus (≤ 60 m). |
 | Relief | MNT LiDAR HD | Dalles 1 km², GeoTIFF float32 au pas de 50 cm, listées par la couche WFS `IGNF_LIDAR-HD_METADONNEE:metadata`. |
 | Ponts | MNT | Le MNT est le sol nu et plonge sous les ponts : creux étroits repérés et interpolés (aperçu). La vraie altitude viendra des points LiDAR classe 17. |
-| Nuage de points | LiDAR HD COPC | Lecture à distance (HTTP Range) des seules cases de 150 m qui touchent le couloir ; on garde le sol (2) et les tabliers de pont (17). |
+| Nuage de points | LiDAR HD COPC | Dalles téléchargées puis découpées au couloir (±40 m) et supprimées ; on garde le sol (2) et les tabliers de pont (17). `--remote` : lecture partielle HTTP Range (plus lente, limitée par l'IGN). |
 
 ### Feuille de route
 
@@ -99,7 +99,7 @@ python fetch.py osm      # centreline (OpenStreetMap, IGN BD TOPO fallback)
 python fetch.py mnt      # 50 cm LiDAR HD terrain (~16 MB per km²)
 python preview.py        # profile, grades, curves, bridges → preview.png
 python fetch.py ortho    # 20 cm aerial imagery
-python fetch.py lidar    # corridor point cloud (partial COPC reads)
+python fetch.py lidar    # corridor point cloud (~10 min, ~120 MB kept)
 ```
 
 Every command is resumable: anything already downloaded is skipped. Data goes
@@ -112,7 +112,7 @@ to `data/<section-name>/` (git-ignored).
 | Centreline | OSM (Overpass) or BD TOPO | Shortest path between start and end over ways carrying the road number; unnumbered roundabouts are stitched (≤ 60 m). |
 | Terrain | LiDAR HD DTM | 1 km² tiles, float32 GeoTIFF at 50 cm, listed by the WFS layer `IGNF_LIDAR-HD_METADONNEE:metadata`. |
 | Bridges | DTM | The DTM is bare earth and dives under bridges: narrow dips are detected and interpolated (preview). Real deck height will come from class-17 LiDAR points. |
-| Point cloud | LiDAR HD COPC | Remote reads (HTTP Range) of only the 150 m cells touching the corridor; ground (2) and bridge decks (17) are kept. |
+| Point cloud | LiDAR HD COPC | Tiles downloaded, cropped to the corridor (±40 m) and deleted; ground (2) and bridge decks (17) are kept. `--remote`: partial HTTP Range reads (slower, rate-limited by IGN). |
 
 ### Roadmap
 

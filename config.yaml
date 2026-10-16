@@ -21,7 +21,7 @@ terrain_margin_m: 300
 # LiDAR HD classes kept: 2 = ground, 17 = bridge deck
 lidar_classes: [2, 17]
 
-# `lidar --full` only: raw LAZ tiles are 0.5-2 GB each. false = delete each one
+# Raw LAZ tiles are ~150-400 MB each. false = delete each one
 # right after cropping (peak disk usage stays at ~1 tile).
 keep_raw_laz: false
 

@@ -5,7 +5,7 @@ Pipeline stage 1: fetch the open data for one road section.
     python fetch.py osm      # road centreline (OpenStreetMap, IGN BD TOPO fallback)
     python fetch.py mnt      # LiDAR HD DTM tiles (terrain, 50 cm)
     python fetch.py ortho    # IGN 20 cm orthophotos around the road
-    python fetch.py lidar    # LiDAR HD point cloud of the corridor (partial COPC reads)
+    python fetch.py lidar    # LiDAR HD point cloud of the corridor (--remote: partial COPC reads)
     python fetch.py all      # osm + mnt + ortho (LiDAR is heavy, run it separately)
 
 All geometries are in Lambert-93 (EPSG:2154), in metres.
@@ -366,19 +366,28 @@ def corridor_cells(area, tile_bounds, cell_m):
     return cells
 
 
-def crop_copc_remote(url, dst, area, classes, tile_bounds, cell_m=150):
+def crop_copc_remote(url, dst, area, classes, tile_bounds, cell_m=150, threads=2):
     """Remotely read (HTTP Range requests) only the parts of the COPC cloud that
-    touch the corridor: a few tens of MB instead of ~1 GB per tile."""
+    touch the corridor. Less data, but slower than a plain download on a good
+    connection, and IGN answers 429 (rate limit) if too many requests run in
+    parallel, hence the low thread count and the retries."""
     import laspy
     from laspy.copc import Bounds
 
     shapely.prepare(area)
     cells = corridor_cells(area, tile_bounds, cell_m)
     kept = 0
-    with laspy.CopcReader.open(url, http_num_threads=8) as rdr:
+    with laspy.CopcReader.open(url, http_num_threads=threads) as rdr:
         with laspy.open(dst, mode="w", header=_new_las_header(rdr.header)) as w:
             for k, (x0, y0, x1, y1) in enumerate(cells, 1):
-                pts = rdr.query(Bounds(mins=np.array([x0, y0]), maxs=np.array([x1, y1])))
+                for attempt in range(5):
+                    try:
+                        pts = rdr.query(Bounds(mins=np.array([x0, y0]), maxs=np.array([x1, y1])))
+                        break
+                    except Exception as e:
+                        if "429" not in str(e) or attempt == 4:
+                            raise
+                        time.sleep(5 * 2 ** attempt)  # rate limited: back off
                 if len(pts):
                     # COPC query bounds are inclusive: avoid duplicates between cells
                     x, y = np.asarray(pts.x), np.asarray(pts.y)
@@ -408,7 +417,7 @@ def crop_laz_local(src, dst, area, classes):
     return kept
 
 
-def cmd_lidar(cfg, yes=False, full=False):
+def cmd_lidar(cfg, remote=False):
     route = load_route(cfg)
     area = corridor_area(cfg, route)
     tiles = lidar_tiles(area, "url_npl")
@@ -422,25 +431,22 @@ def cmd_lidar(cfg, yes=False, full=False):
             and not (crop_dir / (out_name(t) + ".empty")).exists()]
     print(f"{len(tiles)} LiDAR tiles touch the corridor (±{cfg['corridor_m']} m), "
           f"{len(todo)} left to process.")
-    if full and todo:
-        print(f"Whole-tile mode: ~{len(todo)} GB to download (0.5 to 2 GB per tile).")
-        if not yes and input("Continue? [y/N] ").strip().lower() not in ("y", "yes", "o", "oui"):
-            return
+    if todo and not remote:
+        print("Downloading whole tiles (~150-400 MB each, deleted after cropping).")
     classes = cfg["lidar_classes"]
     for i, t in enumerate(todo, 1):
         dst = crop_dir / out_name(t)
         tmp = dst.with_name(dst.name + ".part.laz")
         print(f"  [{i}/{len(todo)}] {t['name']}")
         t0 = time.time()
-        if not full:
+        if remote:
             try:
                 n = crop_copc_remote(t["url"], tmp, area, classes, t["bounds"])
-            except Exception as e:  # no Range support, laspy too old…
+            except Exception as e:  # rate limit, no Range support, old laspy…
                 tmp.unlink(missing_ok=True)
                 sys.exit(f"\n    ! Remote COPC read failed ({type(e).__name__}: {e})\n"
-                         "    Meanwhile, `python fetch.py lidar --full` downloads whole tiles\n"
-                         "    (~1 GB each) and always works.")
-        if full:
+                         "    Run `python fetch.py lidar` without --remote to download whole tiles.")
+        else:
             raw = cfg["_dir"] / "lidar_raw" / t["name"]
             download(t["url"], raw)
             n = crop_laz_local(raw, tmp, area, classes)
@@ -511,9 +517,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("step", choices=["osm", "mnt", "ortho", "lidar", "all"])
     ap.add_argument("-c", "--config", default="config.yaml")
-    ap.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")
-    ap.add_argument("--full", action="store_true",
-                    help="lidar: download whole tiles instead of partial COPC reads")
+    ap.add_argument("--remote", action="store_true",
+                    help="lidar: partial remote COPC reads instead of downloading whole tiles")
     a = ap.parse_args()
     cfg = load_cfg(a.config)
     if a.step in ("osm", "all"):
@@ -523,7 +528,7 @@ def main():
     if a.step in ("ortho", "all"):
         cmd_ortho(cfg)
     if a.step == "lidar":
-        cmd_lidar(cfg, a.yes, a.full)
+        cmd_lidar(cfg, a.remote)
 
 
 if __name__ == "__main__":
