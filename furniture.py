@@ -161,19 +161,20 @@ def _double(F):
 # ---------------------------------------------------------- OpenStreetMap
 def load_osm(path):
     if not path.exists():
-        return {"nodes": {}, "ways": []}
+        return {"nodes": {}, "ways": [], "node_ways": []}
     osm = json.loads(path.read_text(encoding="utf-8"))
-    nodes, ways = {}, []
+    nodes, ways, node_ways = {}, [], []
     for e in osm.get("elements", []):
         if e["type"] == "node":
             x, y = lambert93(e["lon"], e["lat"])
             nodes[e["id"]] = (float(x), float(y), e.get("tags") or {})
     for e in osm.get("elements", []):
         if e["type"] == "way":
-            pts = [nodes[n][:2] for n in e.get("nodes", []) if n in nodes]
-            if len(pts) >= 2:
-                ways.append((np.array(pts), e.get("tags") or {}))
-    return {"nodes": nodes, "ways": ways}
+            ids = [n for n in e.get("nodes", []) if n in nodes]
+            if len(ids) >= 2:
+                ways.append((np.array([nodes[n][:2] for n in ids]), e.get("tags") or {}))
+                node_ways.append((ids, e.get("tags") or {}))
+    return {"nodes": nodes, "ways": ways, "node_ways": node_ways}
 
 
 def _speed(v):
@@ -589,8 +590,49 @@ def _sign_plan(road, vmax, osm, p):
         d, k = road.tree.query([x, y])
         if d > 25:
             continue
-        plan.append(("node", x, y, int(k), "stop" if hw == "stop" else "giveway"))
+        app = _approach(osm, nid, tags, road)
+        if app is None:
+            continue
+        plan.append(("node", app[0], app[1], app[2], "stop" if hw == "stop" else "giveway"))
     return plan
+
+
+def _approach(osm, nid, tags, road):
+    """Where a STOP / give-way sign stands and which way it faces: on the
+    right of the road it controls, 2 m before the node, facing the drivers
+    who come along that road (OSM direction=forward/backward along the way).
+    Returns (x, y, face_angle) or None when the road is unknown."""
+    x, y = osm["nodes"][nid][:2]
+    best = None
+    for ids, wt in osm.get("node_ways", []):
+        if nid not in ids or "highway" not in wt:
+            continue
+        i = ids.index(nid)
+        d = tags.get("direction", "")
+        if d == "forward" and i > 0:
+            prev = ids[i - 1]
+        elif d == "backward" and i < len(ids) - 1:
+            prev = ids[i + 1]
+        elif d not in ("forward", "backward"):
+            # no direction: traffic comes from the end farther from the main road
+            cand = [ids[j] for j in (i - 1, i + 1) if 0 <= j < len(ids)]
+            if not cand:
+                continue
+            prev = max(cand, key=lambda n: road.tree.query(osm["nodes"][n][:2])[0])
+        else:
+            continue
+        px, py = osm["nodes"][prev][:2]
+        L = math.hypot(x - px, y - py)
+        if L < 0.5:
+            continue
+        ax, ay = (x - px) / L, (y - py) / L          # direction of travel towards the node
+        main = wt.get("ref", "") and road.tree.query([x, y])[0] < 6
+        score = (0 if main else 1, L)
+        if best is None or score > best[0]:
+            back = min(2.0, 0.8 * L)
+            sx, sy = x - ax * back + ay * 3.2, y - ay * back - ax * 3.2   # right of the road
+            best = (score, (sx, sy, math.atan2(-ay, -ax)))
+    return best[1] if best else None
 
 
 SIGN_KINDS = ["speed30", "speed50", "speed70", "speed80", "speed90", "stop", "giveway"]
@@ -603,14 +645,10 @@ def build_signs(acc, road, plan, town_slots):
     n = 0
     for item in plan:
         if item[0] == "node":
-            _, x, y, k, kind = item
-            # on the side road, facing away from the main road
-            ang = math.atan2(y - road.y[k], x - road.x[k])
-            px, py = x, y
-            zg = road.dtm.sample(np.array([x]), np.array([y]))[0]
+            _, px, py, face, kind = item          # face: the plate normal looks at the drivers
+            zg = road.dtm.sample(np.array([px]), np.array([py]))[0]
             if not np.isfinite(zg):
                 continue
-            face = ang        # the plate normal points away from the main road
             text = ""
         else:
             s, sd, fd, kind, text = item

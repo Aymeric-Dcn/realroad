@@ -600,7 +600,9 @@ def cmd_roadside(cfg, remote=True):
     m = 0.003
     bbox = f"{lat0 - m:.5f},{lon0 - m:.5f},{lat1 + m:.5f},{lon1 + m:.5f}"
     q = f"""[out:json][timeout:120];
+node["highway"~"^(stop|give_way)$"]({bbox})->.sg;
 (
+  way(bn.sg)["highway"];
   way["barrier"]({bbox});
   node["barrier"]({bbox});
   node["traffic_sign"]({bbox});
