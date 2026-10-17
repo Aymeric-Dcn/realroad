@@ -74,7 +74,8 @@ python trees3d.py
 Puis dans Content Manager → **Content → Tools → Creator tools → Tree converter**,
 pour chacun des 4 fichiers `data\<nom>\csp_trees\*.fbx` (`pine_a`, `pine_b`,
 `oak`, `shrub`) : choisir le `.fbx`, enregistrer le `.bin` **au même endroit et
-sous le même nom** (`pine_a.bin`…). Dès que les 4 `.bin` sont là,
+sous le même nom** (`pine_a.bin`…). Les textures sont à côté des `.fbx` (sinon
+arbres noirs ; `build_track.py` complète de toute façon un `.bin` sans textures). Dès que les 4 `.bin` sont là,
 `python realroad.py --from build_track --install "…"` place les ~37 000 arbres
 LiDAR en 3D (liste `extension\trees\realroad_trees.txt`). Pour revenir aux
 arbres plats : `track.csp_trees: false`.
@@ -183,7 +184,8 @@ python trees3d.py
 Then in Content Manager → **Content → Tools → Creator tools → Tree converter**,
 for each of the 4 files `data\<name>\csp_trees\*.fbx` (`pine_a`, `pine_b`,
 `oak`, `shrub`): pick the `.fbx`, save the `.bin` **in the same folder under the
-same name** (`pine_a.bin`…). Once the 4 `.bin` are there,
+same name** (`pine_a.bin`…). The textures sit next to the `.fbx` (black trees
+otherwise; `build_track.py` fills a `.bin` without textures anyway). Once the 4 `.bin` are there,
 `python realroad.py --from build_track --install "…"` places the ~37,000 LiDAR
 trees in 3D (list `extension\trees\realroad_trees.txt`). Back to flat trees:
 `track.csp_trees: false`.

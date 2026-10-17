@@ -869,12 +869,22 @@ def main():
                 opts = KIND_SPECIES.get(int(tk_), ("oak",))
                 sp = opts[int(rng_.integers(0, len(opts)))]
                 size = th_ / MODEL_HEIGHT[sp]
-                width = float(np.clip((tr_ / MODEL_CROWN_R[sp]) / max(size, 1e-3), 0.6, 1.6))
+                crown = tr_
+                d_, k_ = axis_tree.query([tx_, ty_])
+                edge_ = d_ - half[k_]
+                if edge_ < crown:          # do not let the model hang far over the road
+                    crown = max(edge_ + 1.0, 0.6 * tr_)
+                width = float(np.clip((crown / MODEL_CROWN_R[sp]) / max(size, 1e-3), 0.5, 1.6))
                 csp_list.append([sp, round(tx_ - x0, 2), round(tz_ - z0 - 0.1, 2), round(-(ty_ - y0), 2),
                                  round(float(rng_.uniform(0, 360)), 0), round(float(size), 3), round(width, 3)])
             (out / "csp_trees").mkdir(exist_ok=True)
+            from trees3d import fix_bin
+
             for b in csp_bins:
-                shutil.copy(b, out / "csp_trees" / b.name)
+                filled = fix_bin(b, csp_dir if (csp_dir / "leaves.png").exists() else csp_dir / "src",
+                                 out / "csp_trees" / b.name)
+                if filled:
+                    print(f"  {b.name}: textures added ({', '.join(filled)})")
         pal_f = d / "trees_palette.json"
         pal = json.loads(pal_f.read_text()) if pal_f.exists() else {
             "pine": [62, 78, 52], "broadleaf": [88, 100, 66], "shrub": [104, 104, 74]}

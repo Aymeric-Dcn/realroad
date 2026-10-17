@@ -4,9 +4,12 @@ ready for Content Manager's CSP tree converter.
 
     blender -b -P blender_trees.py -- data/<name>/csp_trees/src
 
-For each species: the three OBJ levels of detail (LOD_A, LOD_B, LOD_C) in one
-scene, pivot at the middle of the base, materials with diffuse (alpha =
-cut-out for the leaves) and normal textures, textures embedded in the FBX.
+For each species: the detailed model (LOD_A) as a single mesh, pivot at the
+middle of the base, materials with diffuse (alpha = cut-out for the leaves)
+and normal textures. The converter of Content Manager merged the three LOD
+meshes into one (three overlapping trees), and CSP makes the distant
+versions itself, so only LOD_A goes in. The textures are copied next to the
+FBX (the converter reads them from there: embedded ones came out empty).
 Written next to the src folder: data/<name>/csp_trees/<species>.fbx
 """
 import os
@@ -15,7 +18,7 @@ import sys
 import bpy
 
 SPECIES = ["pine_a", "pine_b", "oak", "shrub"]
-LODS = ["A", "B", "C"]
+LODS = ["A"]
 
 
 def material(name, src, diffuse, normal, alpha):
@@ -63,6 +66,10 @@ def main():
         raise SystemExit("usage: blender -b -P blender_trees.py -- <csp_trees/src folder>")
     src = os.path.abspath(argv[0])
     dst = os.path.dirname(src)
+    import shutil
+
+    for t in ("bark.png", "bark_normal.png", "leaves.png", "leaves_normal.png"):
+        shutil.copy(os.path.join(src, t), os.path.join(dst, t))
     for sp in SPECIES:
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bark = material("bark", src, "bark.png", "bark_normal.png", alpha=False)
@@ -90,7 +97,7 @@ def main():
             o.select_set(True)
         bpy.context.view_layer.objects.active = objs[0]
         out = os.path.join(dst, f"{sp}.fbx")
-        bpy.ops.export_scene.fbx(filepath=out, use_selection=True, path_mode="COPY", embed_textures=True,
+        bpy.ops.export_scene.fbx(filepath=out, use_selection=True, path_mode="STRIP", embed_textures=False,
                                  axis_forward="-Z", axis_up="Y", apply_scale_options="FBX_SCALE_UNITS",
                                  mesh_smooth_type="OFF", object_types={"MESH"})
         print(f"→ {out} ({len(objs)} LODs)")

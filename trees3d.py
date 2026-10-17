@@ -206,7 +206,7 @@ def build_species(name, lod, seed=1):
     grow = math.sqrt(len(tips) / n_keep)
     for i in order[:n_keep]:
         p, cc, size = tips[i]
-        for _ in range(4 if lod == "A" else 2):
+        for _ in range(5 if lod == "A" else 2):
             card(mesh, p + rng.normal(0, 0.25, 3), size * grow, cc, rng, cell)
     return mesh
 
@@ -295,6 +295,32 @@ def leaves_textures(out, palette, seed=9):
     rgba = bleed(atlas.astype(np.float32) / 255.0)
     Image.fromarray((np.clip(rgba, 0, 1) * 255).astype(np.uint8), "RGBA").save(out / "leaves.png")
     Image.fromarray(_normal_from_height(hgt_all * 4)).save(out / "leaves_normal.png")
+
+
+def fix_bin(bin_path, tex_dir, dst=None):
+    """CSP tree .bin = zip archive. Fill the texture entries the converter left
+    empty with the generated textures (black trees otherwise). Returns the
+    names filled."""
+    import zipfile
+
+    with zipfile.ZipFile(bin_path) as z:
+        items = [(i, z.read(i.filename)) for i in z.infolist()]
+    filled = []
+    out = []
+    for info, data in items:
+        src = Path(tex_dir) / info.filename
+        if len(data) == 0 and src.exists():
+            data = src.read_bytes()
+            filled.append(info.filename)
+        out.append((info.filename, data))
+    target = Path(dst or bin_path)
+    if filled or target != Path(bin_path):
+        tmp = target.with_suffix(".tmp")
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+            for name, data in out:
+                z.writestr(name, data)
+        tmp.replace(target)
+    return filled
 
 
 def main():
