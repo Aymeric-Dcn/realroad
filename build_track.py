@@ -67,6 +67,12 @@ DEFAULTS = {
     "buildings_skip_light": True,    # BD TOPO construction_legere (sheds, greenhouses)
     "furniture": True,           # guard rails, walls, edge posts, signs, poles (furniture.py)
     "furniture_posts": True,     # J6 edge posts (laid out by the rules, not surveyed)
+    "furniture_lidar": False,    # guard rails / walls from roadside_points.npz: too few points on this
+                                 # road (parapets not classified), rock faces taken for walls
+    "furniture_parapets": True,  # low walls on the valley side, laid out by the terrain drop
+    "parapet_drop_m": 1.0,       # terrain this much below the road edge within 2.5 m
+    "parapet_min_run_m": 20.0,
+    "parapet_height_m": 0.65,
     "furniture_lidar_classes": [1, 6, 64, 67],
     "furniture_min_points": 3,   # LiDAR points per metre of road to count as a barrier
     "furniture_min_run_m": 10.0,
@@ -874,7 +880,9 @@ def main():
         from furniture import Road, build_furniture
 
         road = Road(s, x, y, frame, dtm, p["verge_m"])
-        fm, fmat, fst, _ = build_furniture(d, road, p, cfg.get("osm_ref_regex"), tex)
+        fm, fmat, fst, runs = build_furniture(d, road, p, cfg.get("osm_ref_regex"), tex)
+        (out / "furniture_runs.json").write_text(json.dumps(
+            [{k: v for k, v in r_.items() if not k.startswith("off_")} for r_ in runs], indent=1))
         materials.update(fmat)
         scen += fm
         print("  road furniture: " + ", ".join(f"{k.replace('_', ' ')} {v:,}" for k, v in fst.items())

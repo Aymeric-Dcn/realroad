@@ -323,6 +323,50 @@ def detect_barriers(road, pts_npz, osm, p):
     return runs
 
 
+def detect_parapets(road, built_up, taken, p):
+    """Low parapet walls on the valley side. On the Route Napoléon the
+    street photos show them wherever the ground drops away beside the road
+    (stone or concrete, ~0.65 m). The LiDAR HD barely sees them (a handful of
+    points, not in the DTM), so they are laid out by that rule: terrain
+    more than `parapet_drop_m` below the road edge within 2.5 m, over at
+    least 20 m, outside villages. Not surveyed one by one."""
+    n = len(road.s)
+    step = 2
+    ks = np.arange(0, n, step)
+    offs = np.arange(0.25, 4.01, 0.25)
+    runs = []
+    for sd in (-1, 1):
+        e = np.where(sd > 0, road.f["left"][ks], road.f["right"][ks])
+        T = e[:, None] + sd * offs[None, :]
+        px = road.x[ks][:, None] + T * road.f["nx"][ks][:, None]
+        py = road.y[ks][:, None] + T * road.f["ny"][ks][:, None]
+        zt = road.dtm.sample(px.ravel(), py.ravel()).reshape(px.shape)
+        ze = road.road_z(ks, e)
+        drop = ze[:, None] - zt
+        near = drop[:, offs <= 2.5]
+        steep = np.nanmax(np.nan_to_num(near, nan=0), axis=1) >= p["parapet_drop_m"]
+        steep &= np.nanmax(np.nan_to_num(drop, nan=0), axis=1) >= p["parapet_drop_m"] + 0.5
+        steep &= ~built_up[ks]
+        steep &= ~taken[sd][np.clip(road.s[ks].astype(int), 0, len(taken[sd]) - 1)]
+        # where the drop starts: the wall stands just before it
+        first = np.argmax(np.nan_to_num(drop, nan=0) > 0.3, axis=1)
+        off = np.clip(offs[first] - 0.25, 0.3, 2.0)
+        idx = np.flatnonzero(steep)
+        if not len(idx):
+            continue
+        groups = np.split(idx, np.flatnonzero(np.diff(idx) > 4) + 1)   # gaps up to ~8 m bridged
+        for g in groups:
+            s0, s1 = road.s[ks[g[0]]], road.s[ks[g[-1]]]
+            if s1 - s0 < p["parapet_min_run_m"]:
+                continue
+            ss = road.s[ks[g[0]:g[-1] + 1]]
+            oo = np.convolve(np.pad(off[g[0]:g[-1] + 1], 5, mode="edge"), np.ones(11) / 11, mode="valid")
+            runs.append({"side": sd, "s0": float(s0), "s1": float(s1), "kind": "wall", "src": "rule",
+                         "off": float(np.median(oo)), "height": p["parapet_height_m"],
+                         "off_s": ss, "off_v": oo, "thickness": 0.35})
+    return runs
+
+
 # ---------------------------------------------------------------- builders
 RAIL_LOW, RAIL_HIGH = 0.45, 0.76      # W-beam rail band above the ground (m)
 
@@ -376,7 +420,7 @@ def build_wall(acc, road, run):
     k = road.k(s_)
     off = np.interp(s_, run["off_s"], run["off_v"]) if "off_s" in run else np.full(len(s_), run["off"])
     off = np.convolve(np.pad(off, 3, mode="edge"), np.ones(7) / 7, mode="valid")
-    th = 0.45
+    th = run.get("thickness", 0.45)
     t_in = road.edge(k, sd) + sd * off
     t_out = t_in + sd * th
     zg = road.ground(k, t_in)
@@ -389,7 +433,7 @@ def build_wall(acc, road, run):
     V = np.concatenate([np.column_stack([ax, ay, z0]), np.column_stack([ax, ay, z1]),
                         np.column_stack([bx, by, z1]), np.column_stack([bx, by, z0])])
     UV = np.concatenate([np.column_stack([L, z0 - zg]), np.column_stack([L, z1 - zg]),
-                         np.column_stack([L, z1 - zg + th]), np.column_stack([L, z0 - zg + 2 * th])]) / 1.5
+                         np.column_stack([L, z1 - zg + th]), np.column_stack([L, z0 - zg + 2 * th])]) / 1.0
     F = []
     for a_, b_ in ((0, 1), (1, 2), (2, 3)):
         for i in range(n - 1):
@@ -621,9 +665,15 @@ def build_furniture(d, road, p, ref_regex, tex_dir):
     pts = d / "roadside_points.npz"
     acc = Acc()
     stats = {}
-    runs = detect_barriers(road, pts if pts.exists() else None, osm, p)
+    runs = detect_barriers(road, pts if (pts.exists() and p["furniture_lidar"]) else None, osm, p)
     nb = int(road.s[-1]) + 2
     blocked = {-1: np.zeros(nb, bool), 1: np.zeros(nb, bool)}
+    for r_ in runs:
+        blocked[r_["side"]][int(max(0, r_["s0"] - 5)):int(r_["s1"] + 5)] = True
+    vmax = maxspeed_profile(road, osm, ref_regex)
+    built_up = (vmax > 0) & (vmax <= 50)
+    if p["furniture_parapets"]:
+        runs += detect_parapets(road, built_up, blocked, p)
     L = {"rail": 0.0, "wall": 0.0}
     for r_ in runs:
         if r_["kind"] == "rail":
@@ -632,8 +682,6 @@ def build_furniture(d, road, p, ref_regex, tex_dir):
             L["wall"] += build_wall(acc, road, r_)
         blocked[r_["side"]][int(max(0, r_["s0"] - 10)):int(r_["s1"] + 10)] = True
     stats["guard_rails_m"], stats["walls_m"] = round(L["rail"]), round(L["wall"])
-    vmax = maxspeed_profile(road, osm, ref_regex)
-    built_up = (vmax > 0) & (vmax <= 50)
     stats["edge_posts"] = build_posts(acc, road, blocked, built_up, p) if p["furniture_posts"] else 0
     plan = _sign_plan(road, vmax, osm, p)
     towns = sorted({(it[3], it[4]) for it in plan if it[0] != "node" and it[3] in ("town", "town_end")})

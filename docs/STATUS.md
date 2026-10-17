@@ -38,8 +38,9 @@ Corrigé (v0.4, à tester) :
 bâtiments OK (dans la réalité les arbres en cachent beaucoup), jouable. Fait ensuite (v0.5, à tester) :
 - **végétation en volume** : cartes de feuillage dans les couronnes près de la route, sous-bois,
   buissons et haies tirés de la végétation basse du MNH (0,6-3 m, à moins de 35 m) ;
-- **mobilier routier** (`fetch.py roadside` + `furniture.py`) : glissières et murets détectés dans les
-  points LiDAR hors sol (+ OSM), panneaux (limitations OSM, entrées / sorties de village avec le nom,
+- **mobilier routier** (`fetch.py roadside` + `furniture.py`) : parapets bas côté vallée là où le terrain
+  tombe (5,5 km ; vérifié sur les photos : 8 points justes sur 9 — le LiDAR HD ne voit quasiment pas
+  ces parapets, ni les glissières), glissières et murs OSM, panneaux (limitations OSM, entrées / sorties de village avec le nom,
   STOP, cédez-le-passage), balises J6 selon les règles, poteaux et pylônes électriques ;
 - **collisions** : glissières, murets, murs des bâtiments, troncs près de la route ;
 - **Custom Shaders Patch** : herbe 3D sur les parties vertes, pluie sur la chaussée.
@@ -82,7 +83,8 @@ Fixed in v0.4:
 
 **Feedback 17/10 late morning (v0.4)**: good, mountain view great, playable. Done next (v0.5, to test):
 vegetation with volume (foliage cards, understory, bushes and hedges from the low canopy), road
-furniture (guard rails and walls from the above-ground LiDAR points + OSM, signs, J6 edge posts,
+furniture (low parapets on the valley side where the ground drops — 8 of 9 checked against the photos;
+the LiDAR HD hardly sees them — OSM guard rails and walls, signs, J6 edge posts,
 poles and pylons), collisions (rails, walls, buildings, trunks near the road), CSP grass and rain.
 
 **Known limits**:
