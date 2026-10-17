@@ -12,6 +12,7 @@ import numpy as np
 from textures import FACADE_BAY_M, TREE_CELL, TREE_CELLS, TREE_WIDTH_FACTOR
 
 MAX_VERTS = 60_000
+PLANES = 3          # vertical billboard planes per tree
 
 
 def _tile_index(x, y, tiles):
@@ -46,30 +47,32 @@ def build_trees(trees_csv, dtm, tiles, seed=3):
     margin = 2.0 / (512 * TREE_CELLS)
     for ti in np.unique(tidx):
         sel = np.flatnonzero(tidx == ti)
-        for c0 in range(0, len(sel), MAX_VERTS // 8):
-            s_ = sel[c0:c0 + MAX_VERTS // 8]
+        per = 4 * PLANES
+        for c0 in range(0, len(sel), MAX_VERTS // per):
+            s_ = sel[c0:c0 + MAX_VERTS // per]
             n = len(s_)
-            V = np.zeros((n, 8, 3))
-            UV = np.zeros((n, 8, 2))
-            for q, ang in enumerate((theta[s_], theta[s_] + np.pi / 2)):
+            V = np.zeros((n, per, 3))
+            UV = np.zeros((n, per, 2))
+            cell = np.array([TREE_CELL[k][p % len(TREE_CELL[k])] for k, p in zip(kind[s_], pick[s_])])
+            u0, u1 = cell / TREE_CELLS + margin, (cell + 1) / TREE_CELLS - margin
+            wf = np.array([TREE_WIDTH_FACTOR.get(k, 1.2) for k in kind[s_]])
+            hw = r[s_] * wf
+            zb, zt = zg[s_] - 0.15, zg[s_] - 0.15 + h[s_] * 1.03
+            for q in range(PLANES):   # planes 180/PLANES degrees apart, like a star seen from above
+                ang = theta[s_] + q * np.pi / PLANES
                 ux, uy = np.cos(ang), np.sin(ang)
-                wf = np.array([TREE_WIDTH_FACTOR.get(k, 1.2) for k in kind[s_]])
-                hw = r[s_] * wf
-                zb, zt = zg[s_] - 0.15, zg[s_] - 0.15 + h[s_] * 1.03
                 for j, (sx, zz) in enumerate(((-1, zb), (1, zb), (1, zt), (-1, zt))):
                     V[:, 4 * q + j, 0] = x[s_] + sx * hw * ux
                     V[:, 4 * q + j, 1] = y[s_] + sx * hw * uy
                     V[:, 4 * q + j, 2] = zz
-                cell = np.array([TREE_CELL[k][p % len(TREE_CELL[k])] for k, p in zip(kind[s_], pick[s_])])
-                u0, u1 = cell / TREE_CELLS + margin, (cell + 1) / TREE_CELLS - margin
                 UV[:, 4 * q + 0] = np.column_stack([u0, np.zeros(n)])
                 UV[:, 4 * q + 1] = np.column_stack([u1, np.zeros(n)])
                 UV[:, 4 * q + 2] = np.column_stack([u1, np.ones(n)])
                 UV[:, 4 * q + 3] = np.column_stack([u0, np.ones(n)])
-            base = (np.arange(n) * 8)[:, None]
+            base = (np.arange(n) * per)[:, None]
             quad = np.array([[0, 1, 2], [0, 2, 3], [0, 2, 1], [0, 3, 2]])
-            F = np.concatenate([base[:, :, None] + quad[None] + 4 * q for q in (0, 1)], axis=1).reshape(-1, 3)
-            name = f"trees_{_tile_name(tiles[ti]) if ti >= 0 else 'out'}_{c0 // (MAX_VERTS // 8)}"
+            F = np.concatenate([base[:, :, None] + quad[None] + 4 * q for q in range(PLANES)], axis=1).reshape(-1, 3)
+            name = f"trees_{_tile_name(tiles[ti]) if ti >= 0 else 'out'}_{c0 // (MAX_VERTS // per)}"
             out.append((name, "trees", V.reshape(-1, 3), F.astype(np.int32), UV.reshape(-1, 2), True))
     return out
 
@@ -175,20 +178,22 @@ def _num(v, default=None):
 
 
 def building_heights(props):
-    """(eaves, ridge) above the lowest ground, from the BD TOPO attributes."""
+    """(eaves, roof height) from the BD TOPO attributes. BD TOPO `hauteur` is
+    measured from the ground to the gutter (eaves); the roof height is the
+    difference between the highest and lowest roof altitudes."""
     sol = _num(props.get("altitude_minimale_sol"))
     toit_min = _num(props.get("altitude_minimale_toit"))
     toit_max = _num(props.get("altitude_maximale_toit"))
-    H = _num(props.get("hauteur"))
-    if (H is None or H < 1.5) and sol is not None and toit_max is not None:
-        H = toit_max - sol
-    if H is None or H < 1.5:
-        H = 6.0
-    H = float(np.clip(H, 2.5, 40.0))
-    eave = toit_min - sol if (sol is not None and toit_min is not None) else None
-    if eave is None or not (1.8 <= eave <= H):
-        eave = H * 0.8 if H > 4 else H
-    return float(eave), float(H)
+    eave = _num(props.get("hauteur"))
+    if (eave is None or eave < 1.5) and sol is not None and toit_min is not None:
+        eave = toit_min - sol
+    if eave is None or eave < 1.5:
+        eave = 5.5
+    eave = float(np.clip(eave, 2.3, 25.0))
+    roof = toit_max - toit_min if (toit_max is not None and toit_min is not None) else None
+    if roof is None or not (0.0 <= roof <= 8.0):
+        roof = 1.8
+    return eave, float(roof)
 
 
 def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p):
@@ -200,6 +205,9 @@ def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p):
     n_b = n_gable = 0
     bay_u, bay_v = FACADE_BAY_M
     for f in fc.get("features", []):
+        props_ = f.get("properties") or {}
+        if p.get("buildings_skip_light", True) and props_.get("construction_legere"):
+            continue   # sheds, greenhouses, carports: they all looked like houses
         for ring in _rings(f.get("geometry") or {}):
             ex = _clean_ring(ring)
             if len(ex) < 3:
@@ -217,9 +225,9 @@ def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p):
                 continue
             zg = np.where(np.isfinite(zg), zg, np.nanmin(zg))
             ground, top_ground = float(zg.min()), float(zg.max())
-            eave, ridge = building_heights(f.get("properties") or {})
-            z_eave = max(ground + eave, top_ground + 2.2)
-            z_ridge = max(ground + ridge, z_eave)
+            eave, roof_h = building_heights(f.get("properties") or {})
+            z_eave = max(float(zg.mean()) + eave, top_ground + 2.2)
+            z_ridge = z_eave + roof_h
             z_base = ground - 0.5
             cxy = ex.mean(0)
             ti = int(_tile_index(np.array([cxy[0]]), np.array([cxy[1]]), tiles)[0])
@@ -243,6 +251,8 @@ def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p):
             q, rect_area = _min_rect(ex)
             rect = area / max(rect_area, 1e-6)
             tb = tiles[ti]["bounds"]
+            short = min(np.hypot(*(q[1] - q[0])), np.hypot(*(q[2] - q[1])))
+            z_ridge = z_eave + min(z_ridge - z_eave, 0.42 * short)
             if z_ridge - z_eave >= 0.8 and rect >= 0.85 and len(ex) <= 12:
                 n_gable += 1
                 e0, e1 = q[1] - q[0], q[2] - q[1]

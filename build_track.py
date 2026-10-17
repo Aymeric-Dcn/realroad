@@ -51,6 +51,10 @@ DEFAULTS = {
     "verge_m": 2.5,              # blend from the road edge to the terrain over this width
     "verge_outer_m": 7.0,        # the verge strip continues (just under the terrain) to here
     "verge_texture": "ortho",    # "ortho" = the orthophoto (blends with the terrain), "procedural"
+    "roadside_photos": True,     # bake the street-level photos (fetch.py streetview) on the verges
+    "roadside_band_m": 12.0,     # verge width when photos are used
+    "roadside_piece_m": 50.0,    # one baked texture per piece of verge
+    "roadside_texture_px": [1024, 256],
     "terrain_half_width_m": 120.0,
     "terrain_grid_m": 2.5,
     "far_terrain_m": 290.0,      # coarse terrain ring out to this distance (0 = off); data reach ~300 m
@@ -59,7 +63,8 @@ DEFAULTS = {
     "trees": True,               # billboards from trees.csv (trees.py) when present
     "buildings": True,           # from buildings_l93.geojson (fetch.py buildings) when present
     "buildings_max_m": 200.0,
-    "buildings_min_area_m2": 8.0,
+    "buildings_min_area_m2": 15.0,
+    "buildings_skip_light": True,    # BD TOPO construction_legere (sheds, greenhouses)
     "z_sigma_m": 6.0,
     "crossfall_sigma_m": 10.0,
     "despike_window_m": 15.0,
@@ -416,9 +421,14 @@ def build_verges(x, y, edges, frame, dtm, p):
     terrain is cut out around the road (build_terrain) and overlaps the outer
     part, so there is neither a gap nor triangles poking through."""
     blend, outer = p["verge_m"], p["verge_outer_m"]
-    offs = np.array([0.0, 0.4, 0.4 + (blend - 0.4) / 3, 0.4 + 2 * (blend - 0.4) / 3, blend,
-                     (blend + outer) / 2, outer])
-    out = {}
+    follow = max(blend, p.get("verge_follow_m") or blend)   # follows the DTM exactly up to here
+    offs = [0.0, 0.4, 0.4 + (blend - 0.4) / 3, 0.4 + 2 * (blend - 0.4) / 3, blend]
+    if follow > blend:
+        k = max(1, int(round((follow - blend) / 1.25)))
+        offs += list(blend + (follow - blend) * np.arange(1, k + 1) / k)
+    offs += [(follow + outer) / 2, outer]
+    offs = np.array(offs)
+    out = {"offs": offs}
     for side, sign in (("right", -1), ("left", 1)):
         ex, ey, ez = edges[side]
         cols = []
@@ -436,6 +446,8 @@ def build_verges(x, y, edges, frame, dtm, p):
                     w = (o - 0.4) / (blend - 0.4)
                     w = w * w * (3 - 2 * w)                       # smoothstep
                     oz = (ez - 0.03) * (1 - w) + d_ * w
+                elif o <= follow + 1e-9:
+                    oz = d_
                 else:
                     oz = d_ - 0.2
             cols.append((ox, oy, oz))
@@ -485,9 +497,11 @@ def build_terrain(st_x, st_y, frame, dtm, ortho_tiles, p):
         z_road = frame["z"][k] + frame["c"][k] * np.clip(tt, r_, l_)
         # cut the terrain out under the road and the verge blend: the verge
         # strip (down to verge_outer_m, just under the DTM) fills the hole
-        v_ = p["verge_m"] if p["verge_outer_m"] >= p["verge_m"] + 1.5 * g else p["verge_m"] - 0.1
+        follow = max(p["verge_m"], p.get("verge_follow_m") or p["verge_m"])
+        cut = p["verge_outer_m"] >= follow + 1.5 * g
+        v_ = follow if cut else p["verge_m"] - 0.1
         under = near & (tt >= r_ - v_) & (tt <= l_ + v_) & (dist <= np.maximum(-r_, l_) + v_)
-        if p["verge_outer_m"] >= p["verge_m"] + 1.5 * g:
+        if cut:
             z[under] = np.nan
         else:  # old behaviour: push it under the road
             z[under] = np.minimum(np.nan_to_num(z[under], nan=z_road[under]), z_road[under]) - 0.5
@@ -670,6 +684,17 @@ def main():
     right, left = road_extent(s, x, y, cfg, p)
     widths = left - right
     (X, Y, Z, U, V), edges, frame = build_road(s, x, y, z, cf, right, left, p)
+    photos = None
+    if p["roadside_photos"] and (d / "streetview" / "index.json").exists():
+        from roadside import Photos
+
+        photos = Photos(d / "streetview", s, x, y, frame["z"], (frame["right"] + frame["left"]) / 2)
+        if len(photos.items) < 2:
+            photos = None
+        else:
+            p["verge_outer_m"] = max(p["verge_outer_m"], p["roadside_band_m"])
+            p["verge_follow_m"] = p["verge_outer_m"] - 3.0
+            print(f"  roadside from {len(photos.items)} street-level photos (band {p['verge_outer_m']:.0f} m)")
     verges = build_verges(x, y, edges, frame, dtm, p)
     print("Terrain…")
     terr = build_terrain(x, y, frame, dtm, ortho, p)
@@ -714,6 +739,11 @@ def main():
             shutil.copy(tile["file"], tex / tile["file"].name)
         return mname
 
+    n_roadside, cov_all = [0], []
+    if photos is not None:
+        from roadside import OrthoSampler, bake_strip
+
+        ortho_sampler = OrthoSampler(ortho)
     n_cols = X.shape[1]
     rows_per_chunk = int(p["road_chunk_m"] / np.median(np.diff(s)))
     for ci, (r0, r1) in enumerate(chunk_rows(X.shape[0], rows_per_chunk)):
@@ -723,6 +753,28 @@ def main():
         add(phys_name("ROAD", f"{ci:03d}"), "road", verts, grid_faces(r1 - r0 + 1, n_cols), uvs, "ROAD")
         for side in ("right", "left"):
             VX, VY, VZ = (arr[sl] for arr in verges[side])
+            if photos is not None:
+                # columns from the road edge outwards for the baking
+                if side == "right":
+                    VX, VY, VZ = VX[:, ::-1], VY[:, ::-1], VZ[:, ::-1]
+                step_ = float(np.median(np.diff(s)))
+                n_piece = max(2, int(p["roadside_piece_m"] / step_))
+                for a_ in range(0, VX.shape[0] - 1, n_piece):
+                    b_ = min(a_ + n_piece, VX.shape[0] - 1)
+                    rs = slice(a_, b_ + 1)
+                    img, puv, cov = bake_strip(VX[rs], VY[rs], VZ[rs], verges["offs"], s[sl][rs], photos,
+                                               ortho_sampler, size=tuple(p["roadside_texture_px"]))
+                    mname = f"roadside_{side[0]}{n_roadside[0]:04d}"
+                    n_roadside[0] += 1
+                    img.save(tex / f"{mname}.jpg", quality=90)
+                    materials[mname] = {"texture": f"{mname}.jpg", "kind": "terrain"}
+                    vv = np.column_stack([VX[rs].ravel(), VY[rs].ravel(), VZ[rs].ravel()])
+                    add(phys_name("GRASS", f"verge_{side[0]}{ci:03d}_{a_}"), mname, vv,
+                        grid_faces(b_ - a_ + 1, VX.shape[1]), puv, "GRASS")
+                    cov_all.append(cov)
+                    if n_roadside[0] % 50 == 0:
+                        print(f"    {n_roadside[0]} roadside textures", flush=True)
+                continue
             if p["verge_texture"] == "ortho":
                 # orthophoto, mapped like the terrain: the verge blends into it
                 mid = VX.shape[1] // 2
@@ -745,6 +797,9 @@ def main():
                 add(phys_name("GRASS", f"verge_{side[0]}{ci:03d}"), "verge", vv,
                     grid_faces(r1 - r0 + 1, VX.shape[1]), vuv, "GRASS")
 
+    if photos is not None:
+        print(f"  roadside: {n_roadside[0]} baked textures, street photos used on "
+              f"{100 * float(np.mean(cov_all)) if cov_all else 0:.0f} % of the verge texels")
     painted = load_markings(cfg, s, p)
     if painted is not None:
         marks = build_markings(x, y, frame, painted, p)
@@ -787,7 +842,7 @@ def main():
         tree_atlas(tex / "trees.png", pal)
         materials["trees"] = {"texture": "trees.png", "shader": "ksTree", "alpha": True, "kind": "trees"}
         scen += tm
-        print(f"  trees: {sum(len(m_[2]) for m_ in tm) // 8:,} billboards in {len(tm)} meshes")
+        print(f"  trees: {sum(len(m_[2]) for m_ in tm) // 12:,} trees in {len(tm)} meshes")
     elif p["trees"]:
         print("  (no trees.csv: run `python fetch.py mnh` then `python trees.py` for the trees)")
     if p["buildings"] and (d / "buildings_l93.geojson").exists():

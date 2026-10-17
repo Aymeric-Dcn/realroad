@@ -92,18 +92,18 @@ def _cell(kind, variant, palette, seed):
             cx = w / 2 + lean + rng.normal(0, 0.16 * w)
             cy = (0.08 + (top_y / h - 0.02) * (i + rng.random()) / n) * h
             clumps.append((cx, cy, rng.uniform(0.18, 0.28) * w, rng.uniform(0.05, 0.08) * h))
-        alpha, col = _crown(rng, clumps, palette["pine"], density=0.7)
+        alpha, col = _crown(rng, clumps, palette["pine"], density=0.9)
     elif kind == "broadleaf":
         # holm / downy oak: short trunk, dense round crown
         _trunk(td, w / 2, h, w / 2 + rng.uniform(-15, 15), 0.6 * h, 16, 10, bark)
         clumps = [(w / 2 + rng.normal(0, 0.12 * w), rng.uniform(0.22, 0.6) * h,
                    rng.uniform(0.2, 0.3) * w, rng.uniform(0.12, 0.17) * h) for _ in range(8)]
-        alpha, col = _crown(rng, clumps, palette["broadleaf"], density=0.75)
+        alpha, col = _crown(rng, clumps, palette["broadleaf"], density=0.95)
     else:
         # garrigue shrub / young tree: crown down to the ground
         clumps = [(w / 2 + rng.normal(0, 0.15 * w), rng.uniform(0.35, 0.85) * h,
                    rng.uniform(0.22, 0.32) * w, rng.uniform(0.15, 0.22) * h) for _ in range(9)]
-        alpha, col = _crown(rng, clumps, palette["shrub"], density=0.8)
+        alpha, col = _crown(rng, clumps, palette["shrub"], density=0.95)
     t = np.asarray(trunk_img, np.float32) / 255.0
     rgba[..., :3] = t[..., :3] * t[..., 3:] * (1 - alpha[..., None]) + col * alpha[..., None]
     rgba[..., 3] = np.maximum(alpha, t[..., 3])
@@ -128,7 +128,23 @@ def bleed(rgba, iterations=6):
     return out
 
 
+def foliage_palette(palette):
+    """The orthophoto crown colours are dark and bluish (shade, haze): lift
+    them to a plausible sunlit foliage colour while keeping their hue order."""
+    out = {}
+    for k, c in palette.items():
+        c = np.array(c, np.float32)
+        lum = c.mean()
+        c = c * max(1.0, 88.0 / max(lum, 1.0))                 # at least mid-dark
+        g = max(c[1], 1.12 * max(c[0], c[2]))                  # green dominant
+        # Mediterranean foliage is olive rather than teal: red not too low, blue low
+        c = np.array([np.clip(c[0], 0.68 * g, g / 1.1), g, min(c[2], 0.62 * g)])
+        out[k] = [int(v) for v in np.clip(c, 0, 230)]
+    return out
+
+
 def tree_atlas(path, palette, seed=7):
+    palette = foliage_palette(palette)
     cells = [("pine", 0), ("pine", 1), ("broadleaf", 0), ("shrub", 0)]
     atlas = np.concatenate([_cell(k, v, palette, seed + i) for i, (k, v) in enumerate(cells)], axis=1)
     atlas = bleed(atlas)

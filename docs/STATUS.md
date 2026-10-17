@@ -23,9 +23,22 @@
 À regarder en jeu : densité et allure des arbres (trop ? pas assez ? couleur ?), performances (images/s),
 bâtiments de Saint-Vallier, puis comparer avec `streetview_sheet.jpg`.
 
+**Retours du 17/10 au matin (v0.3 roulée)** : ville « pas mal », pré reconnaissable ; trop de
+bâtiments hors ville et certains trop grands ; arbres à peine visibles, plutôt transparents.
+Corrigé (v0.4, à tester) :
+- bâtiments : abris / serres (`construction_legere`) retirés, hauteur BD TOPO = égout (et non faîtage),
+  toit limité par l'emprise ; 776 bâtiments au lieu de 1133 ;
+- arbres : 3 plans au lieu de 2, feuillage plus dense, couleurs éclaircies (l'ortho donnait un vert-bleu
+  sombre), matériau plus lumineux ;
+- **bord de route en photos de rue** (expérimental) : les photos Panoramax sont projetées sur
+  l'accotement (bande de 12 m), poses recalées sur la route, test de cohérence entre deux photos pour
+  écarter ce qui n'est pas du sol (voitures, murs, arbres projetés), fondu vers l'ortho au bord.
+
 **Limites connues**
 - Arbres et bâtiments sans collision (on les traverse).
 - Façades génériques (une seule texture) ; arbres stylisés (4 modèles).
+- Bord de route en photos : ne marche bien que sur du sol (accotement, herbe, gravier) ; murs, haies et
+  voitures ne peuvent pas être projetés sur un sol plat : il faudra leur géométrie 3D (LiDAR complet).
 - Sous les arbres et dans Saint-Vallier, bords de route estimés.
 - Accotements goudronnés au-delà des lignes traités comme de l'accotement.
 
@@ -47,6 +60,16 @@ photos Panoramax (façades, talus, murets) ; export glTF pour Unreal ; contrôle
 - **buildings** from BD TOPO, with eaves and ridge heights, orthophoto roofs and generic façades;
 - **street photos**: IGN shot the whole road in 360° on 27/04/2026 (Panoramax, Etalab 2.0); a driver-view
   sheet every 250 m to compare with the game, kept out of Git.
+
+**Feedback 17/10 morning (v0.3)**:
+- town OK;
+- too many buildings outside town;
+- trees barely visible.
+
+Fixed in v0.4:
+- sheds removed and heights corrected;
+- trees use 3 planes with denser, lighter foliage;
+- experimental roadside textured from the street photos.
 
 **Known limits**:
 - no collisions on trees and buildings;

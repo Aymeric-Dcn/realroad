@@ -45,7 +45,7 @@ MATERIALS = {
     "marking": {"ksAmbient": 0.40, "ksDiffuse": 0.45, "ksSpecular": 0.15, "ksSpecularEXP": 20.0},
     # Kunos tree materials: shader ksTree, alpha tested, mostly ambient (0.35-0.55 / 0.1-0.2);
     # scaled down like the terrain
-    "trees": {"ksAmbient": 0.30, "ksDiffuse": 0.14, "ksSpecular": 0.0, "ksSpecularEXP": 1.0, "ksAlphaRef": 0.3},
+    "trees": {"ksAmbient": 0.38, "ksDiffuse": 0.18, "ksSpecular": 0.0, "ksSpecularEXP": 1.0, "ksAlphaRef": 0.3},
     "facade": {"ksAmbient": 0.30, "ksDiffuse": 0.30, "ksSpecular": 0.05, "ksSpecularEXP": 10.0},
 }
 DEFAULTS = {
@@ -685,7 +685,7 @@ def main():
             k = o["key"]
             verts, faces, uvs = data[f"v{k}"], data[f"f{k}"], data[f"uv{k}"]
             assert len(verts) <= KN5_MAX_VERTS, o["name"]
-            inset = tex_size[o["material"]] if o["material"].startswith(("ortho_", "backdrop_")) else None
+            inset = tex_size[o["material"]] if o["material"].startswith(("ortho_", "backdrop_", "roadside_")) else None
             vb, centre, radius = kn5_vertices(verts, faces.astype(np.int64), uvs, inset)
             w.mesh(o["name"], vb, faces.astype("<u2"), mat_names.index(o["material"]), centre, radius)
             nv += len(verts)
