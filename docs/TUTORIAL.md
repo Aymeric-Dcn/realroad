@@ -60,6 +60,25 @@ Content Manager → **Drive → Quick Drive** → choisir la piste → mode **Pr
 La piste contient aussi l'AI line (adversaires IA, mode Track Day), la minimap
 (app « Map ») et des caméras TV pour les replays.
 
+### 4. Arbres 3D (Custom Shaders Patch, facultatif)
+
+CSP sait afficher de vrais arbres 3D (volume, vent, ombres) à la place des
+arbres plats. Les modèles sont générés par `trees3d.py` ; il faut ensuite deux
+outils une seule fois :
+
+```powershell
+python trees3d.py
+& "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b -P blender_trees.py -- data\<nom>\csp_trees\src
+```
+
+Puis dans Content Manager → **Content → Tools → Creator tools → Tree converter**,
+pour chacun des 4 fichiers `data\<nom>\csp_trees\*.fbx` (`pine_a`, `pine_b`,
+`oak`, `shrub`) : choisir le `.fbx`, enregistrer le `.bin` **au même endroit et
+sous le même nom** (`pine_a.bin`…). Dès que les 4 `.bin` sont là,
+`python realroad.py --from build_track --install "…"` place les ~37 000 arbres
+LiDAR en 3D (liste `extension\trees\realroad_trees.txt`). Pour revenir aux
+arbres plats : `track.csp_trees: false`.
+
 ### Problèmes rencontrés
 
 | Symptôme | Cause / solution |
@@ -150,6 +169,24 @@ Content Manager → **Drive → Quick Drive** → pick the track → **Practice*
 
 The track also has an AI line (AI opponents, Track Day mode), a minimap
 ("Map" app) and TV cameras for replays.
+
+### 4. 3D trees (Custom Shaders Patch, optional)
+
+CSP can draw real 3D trees (volume, wind, shadows) instead of the flat ones.
+`trees3d.py` generates the models; two tools are then needed once:
+
+```powershell
+python trees3d.py
+& "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b -P blender_trees.py -- data\<name>\csp_trees\src
+```
+
+Then in Content Manager → **Content → Tools → Creator tools → Tree converter**,
+for each of the 4 files `data\<name>\csp_trees\*.fbx` (`pine_a`, `pine_b`,
+`oak`, `shrub`): pick the `.fbx`, save the `.bin` **in the same folder under the
+same name** (`pine_a.bin`…). Once the 4 `.bin` are there,
+`python realroad.py --from build_track --install "…"` places the ~37,000 LiDAR
+trees in 3D (list `extension\trees\realroad_trees.txt`). Back to flat trees:
+`track.csp_trees: false`.
 
 ### Troubleshooting
 

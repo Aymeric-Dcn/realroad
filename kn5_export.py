@@ -67,7 +67,17 @@ DEFAULTS = {
 }
 
 
-def csp_ext_config(materials):
+def csp_trees_list(trees):
+    """CSP tree list: one line per tree, track coordinates, scaled to the
+    LiDAR height and crown width."""
+    lines = ["configure: color variance = 0.06, 0.06, 0.06",
+             "configure: brightness variance = 0.9, 1.1"]
+    for sp, x, y, z, ang, size, width in trees:
+        lines.append(f"tree: {sp}.bin; pos={x}, {y}, {z}; angle={ang:.0f}; size={size}; width={width}")
+    return "\n".join(lines) + "\n"
+
+
+def csp_ext_config(materials, trees_list=None):
     """Custom Shaders Patch settings for the track (ignored without CSP):
     3D grass on the green parts of the verges and terrain, wet road in the
     rain. CSP material filters: `?` matches any end of the name."""
@@ -102,6 +112,13 @@ def csp_ext_config(materials):
         f"LINES_MATERIALS = {'marking' if 'marking' in materials else ''}",
         "",
     ]
+    if trees_list:
+        lines += [
+            "[TREES]",
+            f"LIST_0 = {trees_list}",
+            f"SURFACE_MATERIALS = {', '.join(grass)}",
+            "",
+        ]
     return "\n".join(lines)
 
 
@@ -747,9 +764,18 @@ def main():
         for d in man["dummies"]:
             w.dummy(d["name"], dummy_matrix(d["pos"], d["fwd"], a.spawn_flip), 0)
     tmp.replace(kn5_path)
-    if p["csp_config"]:
+    trees_list = None
+    if man.get("csp_trees"):
+        tdir = out / "extension" / "trees"
+        tdir.mkdir(parents=True, exist_ok=True)
+        for b in (build / "csp_trees").glob("*.bin"):
+            shutil.copy(b, tdir / b.name)
+        (tdir / "realroad_trees.txt").write_text(csp_trees_list(man["csp_trees"]), encoding="utf-8")
+        trees_list = "trees/realroad_trees.txt"
+        print(f"  CSP 3D trees: {len(man['csp_trees']):,} in extension/trees/realroad_trees.txt")
+    if p["csp_config"] or trees_list:
         (out / "extension").mkdir(exist_ok=True)
-        (out / "extension" / "ext_config.ini").write_text(csp_ext_config(mat_names), encoding="utf-8")
+        (out / "extension" / "ext_config.ini").write_text(csp_ext_config(mat_names, trees_list), encoding="utf-8")
     print(f"  {kn5_path.name}: {len(objs)} meshes, {nv:,} vertices, {nt:,} triangles, "
           f"{len(mat_names)} textures, {kn5_path.stat().st_size / 1e6:.0f} MB")
 

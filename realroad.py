@@ -28,12 +28,13 @@ STEPS = [
     ("road_edges", ["road_edges.py"], "real carriageway edges"),
     ("road_markings", ["road_markings.py"], "real centre and edge lines"),
     ("trees", ["trees.py"], "tree positions, heights, kinds (optional)"),
+    ("trees3d", ["trees3d.py"], "3D tree models for CSP, sources (optional; then Blender + CM)"),
     ("build_track", ["build_track.py"], "track geometry"),
     ("kn5_export", ["kn5_export.py"], "Assetto Corsa track folder"),
     ("streetview_sheet", ["streetview_sheet.py"], "street-level comparison sheet (optional)"),
 ]
 
-OPTIONAL = {"far", "mnh", "buildings", "streetview", "roadside", "trees", "streetview_sheet"}
+OPTIONAL = {"far", "mnh", "buildings", "streetview", "roadside", "trees3d", "trees", "streetview_sheet"}
 
 
 def main():

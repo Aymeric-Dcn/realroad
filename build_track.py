@@ -65,6 +65,7 @@ DEFAULTS = {
     "buildings_max_m": 200.0,
     "buildings_min_area_m2": 15.0,
     "buildings_skip_light": True,    # BD TOPO construction_legere (sheds, greenhouses)
+    "csp_trees": "auto",         # CSP 3D trees (trees3d.py): auto = when data/<name>/csp_trees/*.bin exist
     "furniture": True,           # guard rails, walls, edge posts, signs, poles (furniture.py)
     "furniture_posts": True,     # J6 edge posts (laid out by the rules, not surveyed)
     "furniture_lidar": False,    # guard rails / walls from roadside_points.npz: too few points on this
@@ -849,8 +850,31 @@ def main():
     scen = []
     half = np.maximum(-frame["right"], frame["left"])
     axis_tree = cKDTree(np.column_stack([x, y]))
+    from trees3d import KIND_SPECIES, MODEL_CROWN_R, MODEL_HEIGHT, SPECIES
+
+    csp_dir = d / "csp_trees"
+    csp_bins = [csp_dir / f"{sp}.bin" for sp in SPECIES]
+    use_csp = p["csp_trees"] is True or (p["csp_trees"] == "auto" and all(b.exists() for b in csp_bins))
+    if use_csp and not all(b.exists() for b in csp_bins):
+        print("  ! csp_trees: true but the .bin models are missing (see trees3d.py): flat trees instead")
+        use_csp = False
+    csp_list = None
     if p["trees"] and (d / "trees.csv").exists():
-        tm, ts = build_trees(d / "trees.csv", dtm, ortho, road=(axis_tree, half))
+        tm, ts = build_trees(d / "trees.csv", dtm, ortho, road=(axis_tree, half), tall=not use_csp)
+        if use_csp:
+            # CSP 3D trees: list in track coordinates (east, up, -north from the local origin)
+            rng_ = np.random.default_rng(21)
+            csp_list = []
+            for tx_, ty_, tz_, th_, tr_, tk_ in ts.pop("tall"):
+                opts = KIND_SPECIES.get(int(tk_), ("oak",))
+                sp = opts[int(rng_.integers(0, len(opts)))]
+                size = th_ / MODEL_HEIGHT[sp]
+                width = float(np.clip((tr_ / MODEL_CROWN_R[sp]) / max(size, 1e-3), 0.6, 1.6))
+                csp_list.append([sp, round(tx_ - x0, 2), round(tz_ - z0 - 0.1, 2), round(-(ty_ - y0), 2),
+                                 round(float(rng_.uniform(0, 360)), 0), round(float(size), 3), round(width, 3)])
+            (out / "csp_trees").mkdir(exist_ok=True)
+            for b in csp_bins:
+                shutil.copy(b, out / "csp_trees" / b.name)
         pal_f = d / "trees_palette.json"
         pal = json.loads(pal_f.read_text()) if pal_f.exists() else {
             "pine": [62, 78, 52], "broadleaf": [88, 100, 66], "shrub": [104, 104, 74]}
@@ -860,8 +884,8 @@ def main():
             foliage_atlas(tex / "foliage.png", pal)
             materials["foliage"] = {"texture": "foliage.png", "shader": "ksTree", "alpha": True, "kind": "trees"}
         scen += tm
-        print(f"  trees: {ts['trees']:,} trees, {ts['bushes']:,} bushes, {ts['cards']:,} foliage cards, "
-              f"{ts['trunks']:,} solid trunks, {len(tm)} meshes")
+        print(f"  trees: {ts['trees']:,} trees{' (CSP 3D models)' if use_csp else ''}, {ts['bushes']:,} bushes, "
+              f"{ts['cards']:,} foliage cards, {ts['trunks']:,} solid trunks, {len(tm)} meshes")
     elif p["trees"]:
         print("  (no trees.csv: run `python fetch.py mnh` then `python trees.py` for the trees)")
     if p["buildings"] and (d / "buildings_l93.geojson").exists():
@@ -911,7 +935,8 @@ def main():
         "origin_lambert93": [x0, y0, z0],
         "length_m": float(s[-1]),
         "objects": objects, "materials": materials, "dummies": dm,
-        "far_only_materials": far_only,   # textures only seen from afar: kn5_export uses a lower resolution
+        "far_only_materials": far_only,
+        "csp_trees": csp_list,            # CSP 3D trees: [species, x, y, z, angle, size, width] (kn5_export.py)   # textures only seen from afar: kn5_export uses a lower resolution
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
 

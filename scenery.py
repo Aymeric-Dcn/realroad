@@ -136,11 +136,13 @@ def _trunks(x, y, zg, h):
     return V, np.array(F)
 
 
-def build_trees(trees_csv, dtm, tiles, road=None, seed=3):
+def build_trees(trees_csv, dtm, tiles, road=None, seed=3, tall=True):
     """Tall trees: 3 crossed vertical quads (shader ksTree, normals up as
     Kunos does), plus foliage cards inside the crowns near the road; low
     bushes (kind 3): 2 quads, hidden beyond BUSH_LOD_M; solid trunks next to
-    the road. road = (cKDTree of the axis, half width per station)."""
+    the road. road = (cKDTree of the axis, half width per station).
+    tall=False: no billboards for the tall trees (CSP 3D trees are drawn
+    instead); stats["tall"] then lists them (x, y, z, height, crown r, kind)."""
     t = np.genfromtxt(trees_csv, delimiter=",", names=True)
     if t.size == 0:
         return [], {}
@@ -178,11 +180,14 @@ def build_trees(trees_csv, dtm, tiles, road=None, seed=3):
     tidx = _tile_index(x, y, tiles)
     out = []
     stats = {"trees": int((kind < 3).sum()), "bushes": int((kind == 3).sum()), "cards": 0, "trunks": 0}
+    if not tall:
+        sel = kind < 3
+        stats["tall"] = np.column_stack([x[sel], y[sel], zg[sel], h[sel], r[sel], kind[sel]])
     for ti in np.unique(tidx):
         tn = _tile_name(tiles[ti]) if ti >= 0 else "out"
         sel_t = np.flatnonzero((tidx == ti) & (kind < 3))
         sel_b = np.flatnonzero((tidx == ti) & (kind == 3))
-        if len(sel_t):
+        if len(sel_t) and tall:
             V, UV = _billboards(x[sel_t], y[sel_t], zg[sel_t], h[sel_t], r[sel_t], kind[sel_t],
                                 theta[sel_t], pick[sel_t], PLANES)
             out += _quads_mesh(f"trees_{tn}", "trees", V, UV, {"lod_out": TREE_LOD_M})
@@ -191,6 +196,7 @@ def build_trees(trees_csv, dtm, tiles, road=None, seed=3):
                 V, UV = _cards(rng, x[near], y[near], zg[near], h[near], r[near], kind[near])
                 out += _quads_mesh(f"foliage_{tn}", "foliage", V, UV, {"lod_out": CARD_LOD_M})
                 stats["cards"] += len(V)
+        if len(sel_t):
             solid = sel_t[(edge[sel_t] < TRUNK_MAX_EDGE_M) & (h[sel_t] >= 4.0)]
             if len(solid):
                 TV, TF = _trunks(x[solid], y[solid], zg[solid], h[solid])
