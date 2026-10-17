@@ -1,9 +1,11 @@
 """
-3D scenery for build_track.py: tree billboards (trees.py) and buildings
-(BD TOPO, fetch.py buildings). Everything here is visual only (no physics).
+3D scenery for build_track.py: trees and bushes (trees.py) and buildings
+(BD TOPO, fetch.py buildings).
 
-Meshes are returned as (name, material, verts, faces, uvs, keep_winding) in
-Lambert-93 + metres; build_track.py shifts them to its local origin.
+Meshes are returned as (name, material, verts, faces, uvs, keep_winding[, opts])
+in Lambert-93 + metres; build_track.py shifts them to its local origin. opts:
+surface ("WALL": cars collide with it), hidden (collision only), lod_out (m),
+shadows.
 """
 import json
 
@@ -28,53 +30,183 @@ def _tile_name(t):
 
 
 # ------------------------------------------------------------------- trees
-def build_trees(trees_csv, dtm, tiles, seed=3):
-    """Two crossed vertical quads per tree, both sides (normals end up
-    pointing up in kn5_export, as Kunos does for tree billboards)."""
+TREE_LOD_M = 0.0         # tall trees: always drawn (they make the landscape)
+BUSH_LOD_M = 220.0       # low bushes: not drawn beyond this distance
+CARD_LOD_M = 260.0       # foliage cards inside the near crowns
+CARD_MAX_ROAD_M = 45.0   # trees closer than this to the road get foliage cards
+TRUNK_MAX_EDGE_M = 7.0
+UNDERSTORY_MAX_ROAD_M = 40.0   # bushes added under the trees closer than this   # trunks closer than this to the road edge are solid (collisions)
+
+
+def _quads_mesh(name, material, V, UV, opts):
+    """(n, 4k, 3) quads → double-sided mesh chunks under the vertex limit."""
+    n, per = V.shape[0], V.shape[1]
+    out = []
+    step = max(1, MAX_VERTS // per)
+    quad = np.array([[0, 1, 2], [0, 2, 3], [0, 2, 1], [0, 3, 2]])
+    for c0 in range(0, n, step):
+        v = V[c0:c0 + step]
+        m = len(v)
+        base = (np.arange(m) * per)[:, None, None]
+        F = np.concatenate([base + quad[None] + 4 * q for q in range(per // 4)], axis=1).reshape(-1, 3)
+        out.append((f"{name}_{c0 // step}", material, v.reshape(-1, 3), F.astype(np.int32),
+                    UV[c0:c0 + step].reshape(-1, 2), True, dict(opts)))
+    return out
+
+
+def _billboards(x, y, zg, h, r, kind, theta, pick, planes):
+    """Star of `planes` vertical quads per tree, textured with the atlas cell."""
+    n = len(x)
+    per = 4 * planes
+    V = np.zeros((n, per, 3))
+    UV = np.zeros((n, per, 2))
+    margin = 2.0 / (512 * TREE_CELLS)
+    cell = np.array([TREE_CELL[k][p % len(TREE_CELL[k])] for k, p in zip(kind, pick)])
+    u0, u1 = cell / TREE_CELLS + margin, (cell + 1) / TREE_CELLS - margin
+    wf = np.array([TREE_WIDTH_FACTOR.get(k, 1.2) for k in kind])
+    hw = r * wf
+    zb, zt = zg - 0.15, zg - 0.15 + h * 1.03
+    for q in range(planes):   # planes 180/planes degrees apart, like a star seen from above
+        ang = theta + q * np.pi / planes
+        ux, uy = np.cos(ang), np.sin(ang)
+        for j, (sx, zz) in enumerate(((-1, zb), (1, zb), (1, zt), (-1, zt))):
+            V[:, 4 * q + j, 0] = x + sx * hw * ux
+            V[:, 4 * q + j, 1] = y + sx * hw * uy
+            V[:, 4 * q + j, 2] = zz
+        UV[:, 4 * q + 0] = np.column_stack([u0, np.zeros(n)])
+        UV[:, 4 * q + 1] = np.column_stack([u1, np.zeros(n)])
+        UV[:, 4 * q + 2] = np.column_stack([u1, np.ones(n)])
+        UV[:, 4 * q + 3] = np.column_stack([u0, np.ones(n)])
+    return V, UV
+
+
+# crown depth (share of the height) per kind: pines have a crown on top of a
+# bare trunk, oaks a deep round one, small trees down to the ground
+CROWN_DEPTH = {0: 0.38, 1: 0.6, 2: 0.75}
+
+
+def _cards(rng, x, y, zg, h, r, kind):
+    """Foliage cards: tilted square quads spread inside the crown volume, so
+    the crown looks full from every side (billboards alone look flat or see-
+    through when seen at an angle)."""
+    from textures import FOLIAGE_CELL, FOLIAGE_CELLS
+
+    n_card = np.clip((2.5 + 1.1 * r).astype(int), 3, 9)
+    tot = int(n_card.sum())
+    owner = np.repeat(np.arange(len(x)), n_card)
+    depth = np.array([CROWN_DEPTH.get(k, 0.6) for k in kind])[owner] * h[owner]
+    zc = zg[owner] + h[owner] - 0.5 * depth
+    # random point in the crown ellipsoid (denser towards the outside)
+    d = rng.normal(size=(tot, 3))
+    d /= np.linalg.norm(d, axis=1, keepdims=True)
+    rad = rng.uniform(0.35, 0.8, tot)
+    cx = x[owner] + d[:, 0] * rad * r[owner]
+    cy = y[owner] + d[:, 1] * rad * r[owner]
+    cz = zc + d[:, 2] * rad * 0.42 * depth
+    size = np.clip(0.95 * r[owner], 1.0, 3.6) * rng.uniform(0.8, 1.15, tot)
+    phi = rng.uniform(0, np.pi, tot)
+    tau = rng.uniform(-0.6, 0.6, tot)                   # tilt from vertical
+    u = np.column_stack([np.cos(phi), np.sin(phi), np.zeros(tot)])
+    n0 = np.column_stack([-np.sin(phi), np.cos(phi), np.zeros(tot)])
+    v = np.column_stack([np.zeros(tot), np.zeros(tot), np.ones(tot)]) * np.cos(tau)[:, None] + n0 * np.sin(tau)[:, None]
+    c = np.column_stack([cx, cy, cz])
+    hs = (size / 2)[:, None]
+    V = np.stack([c - u * hs - v * hs, c + u * hs - v * hs, c + u * hs + v * hs, c - u * hs + v * hs], axis=1)
+    cell = np.array([FOLIAGE_CELL.get(k, 2) for k in kind])[owner]
+    cell = np.where((cell == 0) & (rng.random(tot) < 0.5), 1, cell)
+    m = 2.0 / (512 * FOLIAGE_CELLS)
+    u0, u1 = cell / FOLIAGE_CELLS + m, (cell + 1) / FOLIAGE_CELLS - m
+    UV = np.stack([np.column_stack([u0, np.zeros(tot) + m]), np.column_stack([u1, np.zeros(tot) + m]),
+                   np.column_stack([u1, np.ones(tot) - m]), np.column_stack([u0, np.ones(tot) - m])], axis=1)
+    return V, UV
+
+
+def _trunks(x, y, zg, h):
+    """Octagonal prisms around the trunks (collision only)."""
+    k = np.arange(8) * np.pi / 4
+    rr = (0.18 + 0.012 * h)[:, None]
+    ring = np.stack([x[:, None] + rr * np.cos(k), y[:, None] + rr * np.sin(k)], axis=2)   # (n, 8, 2)
+    lo = np.repeat((zg - 0.6)[:, None], 8, 1)
+    hi = np.repeat((zg + 3.0)[:, None], 8, 1)
+    V = np.concatenate([np.dstack([ring, lo]), np.dstack([ring, hi])], axis=1)            # (n, 16, 3)
+    F = []
+    for i in range(8):
+        j = (i + 1) % 8
+        F += [[i, j, 8 + j], [i, 8 + j, 8 + i]]
+    return V, np.array(F)
+
+
+def build_trees(trees_csv, dtm, tiles, road=None, seed=3):
+    """Tall trees: 3 crossed vertical quads (shader ksTree, normals up as
+    Kunos does), plus foliage cards inside the crowns near the road; low
+    bushes (kind 3): 2 quads, hidden beyond BUSH_LOD_M; solid trunks next to
+    the road. road = (cKDTree of the axis, half width per station)."""
     t = np.genfromtxt(trees_csv, delimiter=",", names=True)
     if t.size == 0:
-        return []
+        return [], {}
     t = np.atleast_1d(t)
     x, y, h, r, kind = t["x"], t["y"], t["height_m"], t["crown_r_m"], t["kind"].astype(int)
     zg = dtm.sample(x, y)
-    ok = np.isfinite(zg) & (h > 0.5)
+    ok = np.isfinite(zg) & (h > 0.3)
     x, y, h, r, kind, zg = x[ok], y[ok], h[ok], r[ok], kind[ok], zg[ok]
     rng = np.random.default_rng(seed)
+    if road is not None:
+        dist, k = road[0].query(np.column_stack([x, y]))
+        edge = dist - road[1][k]
+    else:
+        dist = edge = np.full(len(x), np.inf)
+    # understory: the canopy model cannot see under the crowns, but woods
+    # along the road are never bare between the trunks
+    under = np.flatnonzero((kind < 3) & (h >= 6.0) & (dist < UNDERSTORY_MAX_ROAD_M))
+    if len(under):
+        n_u = rng.integers(1, 3, len(under))
+        own = np.repeat(under, n_u)
+        ang = rng.uniform(0, 2 * np.pi, len(own))
+        rad = r[own] * np.sqrt(rng.uniform(0.05, 0.8, len(own)))
+        ux, uy = x[own] + rad * np.cos(ang), y[own] + rad * np.sin(ang)
+        uz = dtm.sample(ux, uy)
+        ud = road[0].query(np.column_stack([ux, uy]))[0] if road is not None else np.full(len(own), np.inf)
+        ue = ud - (road[1][road[0].query(np.column_stack([ux, uy]))[1]] if road is not None else 0)
+        okk = np.isfinite(uz) & (ue > 1.5)
+        x = np.concatenate([x, ux[okk]]); y = np.concatenate([y, uy[okk]]); zg = np.concatenate([zg, uz[okk]])
+        h = np.concatenate([h, rng.uniform(1.1, 2.3, okk.sum())])
+        r = np.concatenate([r, rng.uniform(0.8, 1.4, okk.sum())])
+        kind = np.concatenate([kind, np.full(okk.sum(), 3)])
+        dist = np.concatenate([dist, ud[okk]]); edge = np.concatenate([edge, ue[okk]])
     theta = rng.uniform(0, np.pi, len(x))
     pick = rng.integers(0, 2, len(x))
     tidx = _tile_index(x, y, tiles)
     out = []
-    margin = 2.0 / (512 * TREE_CELLS)
+    stats = {"trees": int((kind < 3).sum()), "bushes": int((kind == 3).sum()), "cards": 0, "trunks": 0}
     for ti in np.unique(tidx):
-        sel = np.flatnonzero(tidx == ti)
-        per = 4 * PLANES
-        for c0 in range(0, len(sel), MAX_VERTS // per):
-            s_ = sel[c0:c0 + MAX_VERTS // per]
-            n = len(s_)
-            V = np.zeros((n, per, 3))
-            UV = np.zeros((n, per, 2))
-            cell = np.array([TREE_CELL[k][p % len(TREE_CELL[k])] for k, p in zip(kind[s_], pick[s_])])
-            u0, u1 = cell / TREE_CELLS + margin, (cell + 1) / TREE_CELLS - margin
-            wf = np.array([TREE_WIDTH_FACTOR.get(k, 1.2) for k in kind[s_]])
-            hw = r[s_] * wf
-            zb, zt = zg[s_] - 0.15, zg[s_] - 0.15 + h[s_] * 1.03
-            for q in range(PLANES):   # planes 180/PLANES degrees apart, like a star seen from above
-                ang = theta[s_] + q * np.pi / PLANES
-                ux, uy = np.cos(ang), np.sin(ang)
-                for j, (sx, zz) in enumerate(((-1, zb), (1, zb), (1, zt), (-1, zt))):
-                    V[:, 4 * q + j, 0] = x[s_] + sx * hw * ux
-                    V[:, 4 * q + j, 1] = y[s_] + sx * hw * uy
-                    V[:, 4 * q + j, 2] = zz
-                UV[:, 4 * q + 0] = np.column_stack([u0, np.zeros(n)])
-                UV[:, 4 * q + 1] = np.column_stack([u1, np.zeros(n)])
-                UV[:, 4 * q + 2] = np.column_stack([u1, np.ones(n)])
-                UV[:, 4 * q + 3] = np.column_stack([u0, np.ones(n)])
-            base = (np.arange(n) * per)[:, None]
-            quad = np.array([[0, 1, 2], [0, 2, 3], [0, 2, 1], [0, 3, 2]])
-            F = np.concatenate([base[:, :, None] + quad[None] + 4 * q for q in range(PLANES)], axis=1).reshape(-1, 3)
-            name = f"trees_{_tile_name(tiles[ti]) if ti >= 0 else 'out'}_{c0 // (MAX_VERTS // per)}"
-            out.append((name, "trees", V.reshape(-1, 3), F.astype(np.int32), UV.reshape(-1, 2), True))
-    return out
+        tn = _tile_name(tiles[ti]) if ti >= 0 else "out"
+        sel_t = np.flatnonzero((tidx == ti) & (kind < 3))
+        sel_b = np.flatnonzero((tidx == ti) & (kind == 3))
+        if len(sel_t):
+            V, UV = _billboards(x[sel_t], y[sel_t], zg[sel_t], h[sel_t], r[sel_t], kind[sel_t],
+                                theta[sel_t], pick[sel_t], PLANES)
+            out += _quads_mesh(f"trees_{tn}", "trees", V, UV, {"lod_out": TREE_LOD_M})
+            near = sel_t[dist[sel_t] < CARD_MAX_ROAD_M]
+            if len(near):
+                V, UV = _cards(rng, x[near], y[near], zg[near], h[near], r[near], kind[near])
+                out += _quads_mesh(f"foliage_{tn}", "foliage", V, UV, {"lod_out": CARD_LOD_M})
+                stats["cards"] += len(V)
+            solid = sel_t[(edge[sel_t] < TRUNK_MAX_EDGE_M) & (h[sel_t] >= 4.0)]
+            if len(solid):
+                TV, TF = _trunks(x[solid], y[solid], zg[solid], h[solid])
+                per = TV.shape[1]
+                step = MAX_VERTS // per
+                for c0 in range(0, len(solid), step):
+                    v = TV[c0:c0 + step]
+                    F = (np.arange(len(v)) * per)[:, None, None] + TF[None]
+                    out.append((f"trunks_{tn}_{c0 // step}", "trees", v.reshape(-1, 3), F.reshape(-1, 3).astype(np.int32),
+                                np.zeros((v.shape[0] * per, 2)), True, {"surface": "WALL", "hidden": True}))
+                stats["trunks"] += len(solid)
+        if len(sel_b):
+            V, UV = _billboards(x[sel_b], y[sel_b], zg[sel_b], h[sel_b], r[sel_b], kind[sel_b],
+                                theta[sel_b], pick[sel_b], 2)
+            out += _quads_mesh(f"bushes_{tn}", "trees", V, UV, {"lod_out": BUSH_LOD_M, "shadows": False})
+    return out, stats
 
 
 # --------------------------------------------------------------- buildings
@@ -283,7 +415,8 @@ def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p):
             n_b += 1
     out = []
     for ti, (V, F, UV) in walls.items():
-        out += _chunks(f"buildings_walls_{_tile_name(tiles[ti])}", "facade", V, F, UV, keep_winding=True)
+        out += [m_ + ({"surface": "WALL"},)   # solid: cars hit the walls
+                for m_ in _chunks(f"buildings_walls_{_tile_name(tiles[ti])}", "facade", V, F, UV, keep_winding=True)]
     for ti, (V, F, UV) in roofs.items():
         mname = f"ortho_{_tile_name(tiles[ti])}"
         out += _chunks(f"buildings_roofs_{_tile_name(tiles[ti])}", mname, V, F, UV, keep_winding=False)

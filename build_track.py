@@ -711,7 +711,8 @@ def main():
 
     arrays, objects = {}, []
 
-    def add(name, material, verts, faces, uvs, physical_surface=None, smooth_shading=True, keep_winding=False):
+    def add(name, material, verts, faces, uvs, physical_surface=None, smooth_shading=True, keep_winding=False,
+            **extra):
         assert len(verts) <= AC_MAX_VERTS, (name, len(verts))
         assert np.isfinite(verts).all(), name
         faces = faces.copy() if keep_winding else fix_winding_up(verts, faces.copy())
@@ -719,10 +720,10 @@ def main():
         arrays[f"v{i}"], arrays[f"f{i}"], arrays[f"uv{i}"] = local(verts), faces, uvs.astype(np.float32)
         objects.append({"name": name, "material": material, "key": i,
                         "surface": physical_surface, "smooth": smooth_shading,
-                        "verts": int(len(verts)), "tris": int(len(faces))})
+                        "verts": int(len(verts)), "tris": int(len(faces)), **extra})
 
     # AC physics: mesh names "<n><SURFACE>" where SURFACE is a key of surfaces.ini
-    phys = {"ROAD": 0, "GRASS": 0}
+    phys = {"ROAD": 0, "GRASS": 0, "WALL": 0}
 
     def phys_name(surface, tag):
         phys[surface] += 1
@@ -831,23 +832,28 @@ def main():
 
     # 3D scenery (visual only): trees (trees.py) and buildings (fetch.py buildings)
     from scenery import build_buildings, build_trees
-    from textures import facade_texture, tree_atlas
+    from textures import facade_texture, foliage_atlas, tree_atlas
 
     scen = []
+    half = np.maximum(-frame["right"], frame["left"])
+    axis_tree = cKDTree(np.column_stack([x, y]))
     if p["trees"] and (d / "trees.csv").exists():
-        tm = build_trees(d / "trees.csv", dtm, ortho)
+        tm, ts = build_trees(d / "trees.csv", dtm, ortho, road=(axis_tree, half))
         pal_f = d / "trees_palette.json"
         pal = json.loads(pal_f.read_text()) if pal_f.exists() else {
             "pine": [62, 78, 52], "broadleaf": [88, 100, 66], "shrub": [104, 104, 74]}
         tree_atlas(tex / "trees.png", pal)
         materials["trees"] = {"texture": "trees.png", "shader": "ksTree", "alpha": True, "kind": "trees"}
+        if ts.get("cards"):
+            foliage_atlas(tex / "foliage.png", pal)
+            materials["foliage"] = {"texture": "foliage.png", "shader": "ksTree", "alpha": True, "kind": "trees"}
         scen += tm
-        print(f"  trees: {sum(len(m_[2]) for m_ in tm) // 12:,} trees in {len(tm)} meshes")
+        print(f"  trees: {ts['trees']:,} trees, {ts['bushes']:,} bushes, {ts['cards']:,} foliage cards, "
+              f"{ts['trunks']:,} solid trunks, {len(tm)} meshes")
     elif p["trees"]:
         print("  (no trees.csv: run `python fetch.py mnh` then `python trees.py` for the trees)")
     if p["buildings"] and (d / "buildings_l93.geojson").exists():
-        half = np.maximum(-frame["right"], frame["left"])
-        bm, n_b, n_g = build_buildings(d / "buildings_l93.geojson", dtm, ortho, cKDTree(np.column_stack([x, y])), half, p)
+        bm, n_b, n_g = build_buildings(d / "buildings_l93.geojson", dtm, ortho, axis_tree, half, p)
         for m_ in bm:
             if m_[1].startswith("ortho_"):
                 use_tile(next(t_ for t_ in ortho if f"ortho_{int(t_['bounds'][0])}_{int(t_['bounds'][1])}" == m_[1]))
@@ -858,8 +864,12 @@ def main():
         print(f"  buildings: {n_b} ({n_g} with a gable roof)")
     elif p["buildings"]:
         print("  (no buildings_l93.geojson: run `python fetch.py buildings` for the buildings)")
-    for name, mat, sv, sf, suv, keep in scen:
-        add(name, mat, sv, sf, suv, keep_winding=keep)
+    for name, mat, sv, sf, suv, keep, *opt in scen:
+        opt = dict(opt[0]) if opt else {}
+        surface = opt.pop("surface", None)    # "WALL": cars collide with it
+        if surface:
+            name = phys_name(surface, name)
+        add(name, mat, sv, sf, suv, surface, keep_winding=keep, **opt)
     far_only = sorted(m_ for m_ in set(materials) - near_mats if m_.startswith(("ortho_", "backdrop_")))
 
     asphalt_texture(tex / "asphalt.png", float(np.median(widths)), p["texture_repeat_m"],

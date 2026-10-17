@@ -661,7 +661,24 @@ def cmd_roadside(cfg, remote=True):
             tmp.replace(dst)
         mb = dst.stat().st_size / 1e6 if dst.exists() else 0
         print(f"    → {n:,} points kept, {mb:.1f} MB, {time.time() - t0:.0f} s")
-    print(f"→ {crop_dir}")
+    # one small array file for roadside.py / build_track.py (no laspy needed there)
+    import laspy
+
+    parts = []
+    for f in sorted(crop_dir.glob("*.laz")):
+        if f.name.endswith(".part.laz"):
+            continue
+        las = laspy.read(f)
+        parts.append(np.column_stack([np.asarray(las.x), np.asarray(las.y), np.asarray(las.z),
+                                      np.asarray(las.classification), np.asarray(las.intensity),
+                                      np.asarray(las.return_number), np.asarray(las.number_of_returns)]))
+    pts = np.concatenate(parts) if parts else np.zeros((0, 7))
+    np.savez_compressed(out_dir / "roadside_points.npz", xyz=pts[:, :3].astype(np.float64),
+                        cls=pts[:, 3].astype(np.uint8), intensity=pts[:, 4].astype(np.uint16),
+                        ret=pts[:, 5].astype(np.uint8), nret=pts[:, 6].astype(np.uint8))
+    cls, cnt = np.unique(pts[:, 3].astype(int), return_counts=True)
+    print(f"→ {crop_dir}\n→ {out_dir / 'roadside_points.npz'}: {len(pts):,} points "
+          f"({', '.join(f'class {c}: {n:,}' for c, n in zip(cls, cnt))})")
 
 
 # ------------------------------------------------------------------- ortho

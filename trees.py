@@ -17,7 +17,9 @@ ground. Every tree top is a local maximum of it:
    the tree height, read along 8 directions (bounded by an allometric guess),
 5. kind (pine / broadleaf / shrub) from the height and the orthophoto colour
    of the crown; the median crown colours give the palette of the tree
-   textures, so the billboards match the photo.
+   textures, so the billboards match the photo,
+6. low vegetation (0.6-3 m: garrigue, hedges) within 35 m of the road: one
+   bush per 2 m cell, kind 3, so the verges are not bare where they are not.
 
 build_track.py turns trees.csv into crossed billboards (shader ksTree).
 """
@@ -39,6 +41,12 @@ DEFAULTS = {
     "window_per_m": 0.18,
     "max_trees": 60000,        # nearest to the road first
     "pine_min_height_m": 7.0,
+    # low vegetation (garrigue, hedges) close to the road, as small bushes
+    "shrubs": True,
+    "shrub_min_height_m": 0.6,
+    "shrub_max_distance_m": 35.0,
+    "shrub_cell_m": 2.0,       # one bush per cell of low vegetation
+    "max_shrubs": 60000,
 }
 
 
@@ -133,6 +141,60 @@ def detect(cfg, q):
     return t
 
 
+def detect_shrubs(cfg, q, trees):
+    """Bushes on the low vegetation (between shrub_min_height_m and
+    min_height_m) near the road: one per cell where the canopy is in that
+    range, outside the crowns of the trees already found."""
+    d = cfg["_dir"]
+    prof = np.genfromtxt(d / "road_profile.csv", delimiter=",", names=True)
+    sx, sy = prof["x"], prof["y"]
+    half = np.full(len(sx), 3.5)
+    if (d / "road_edges.csv").exists():
+        e = np.genfromtxt(d / "road_edges.csv", delimiter=",", names=True)
+        if len(e) == len(sx):
+            half = np.maximum(np.abs(e["right_m"]), np.abs(e["left_m"]))
+    road = cKDTree(np.column_stack([sx, sy]))
+    crowns = cKDTree(trees[:, :2]) if len(trees) else None
+    rmax = float(trees[:, 3].max()) if len(trees) else 0.0
+    dmax, cell = q["shrub_max_distance_m"], q["shrub_cell_m"]
+    rng = np.random.default_rng(5)
+    found = []
+    for f, a, tr in read_tiles(sorted((d / "mnh").glob("*.tif"))):
+        px = tr.a
+        k = max(1, int(round(cell / px)))
+        n_r, n_c = a.shape[0] // k, a.shape[1] // k
+        if not n_r or not n_c:
+            continue
+        blk = np.nan_to_num(a[:n_r * k, :n_c * k]).reshape(n_r, k, n_c, k)
+        hmax = blk.max(axis=(1, 3))
+        cover = ((blk >= q["shrub_min_height_m"]) & (blk < q["min_height_m"])).mean(axis=(1, 3))
+        ok = (hmax >= q["shrub_min_height_m"]) & (hmax < q["min_height_m"] + 1.0) & (cover >= 0.35)
+        r, c = np.nonzero(ok)
+        if not len(r):
+            continue
+        x = tr.c + (c + 0.5) * k * px + rng.uniform(-0.3, 0.3, len(r)) * cell
+        y = tr.f - (r + 0.5) * k * px + rng.uniform(-0.3, 0.3, len(r)) * cell
+        dist, kk = road.query(np.column_stack([x, y]), distance_upper_bound=dmax)
+        keep = np.isfinite(dist)
+        keep[keep] &= dist[keep] >= half[kk[keep]] + q["clearance_m"] + 0.5
+        if crowns is not None and keep.any():
+            # not under a tree crown (the tree is drawn already)
+            dc, kc = crowns.query(np.column_stack([x[keep], y[keep]]), distance_upper_bound=rmax)
+            under = np.isfinite(dc)
+            under[under] = dc[under] < 0.8 * trees[kc[under], 3]
+            keep[np.flatnonzero(keep)[under]] = False
+        h = np.minimum(hmax[r, c], q["min_height_m"])
+        cr = np.clip(0.45 + 0.3 * h, 0.6, 1.5) * (0.8 + 0.4 * cover[r, c])
+        for xi, yi, hi, ci, di in zip(x[keep], y[keep], h[keep], cr[keep], dist[keep]):
+            found.append((xi, yi, float(hi), float(ci), di))
+    if not found:
+        return np.zeros((0, 5))
+    t = np.array(found)
+    if len(t) > q["max_shrubs"]:
+        t = t[np.argsort(t[:, 4])[:q["max_shrubs"]]]
+    return t
+
+
 def ortho_colours(d, xs, ys, r):
     """Mean orthophoto colour inside each crown (NaN where no image)."""
     import re
@@ -215,14 +277,22 @@ def main():
     rgb = ortho_colours(d, t[:, 0], t[:, 1], t[:, 3])
     kind = classify(t, rgb, q)
     pal = palette(rgb, kind)
+    n_sh = 0
+    if q["shrubs"]:
+        sh = detect_shrubs(cfg, q, t)
+        n_sh = len(sh)
+        t = np.concatenate([t, sh]) if n_sh else t
+        kind = np.concatenate([kind, np.full(n_sh, 3, int)])
     np.savetxt(d / "trees.csv", np.column_stack([t[:, :4], kind]), delimiter=",",
                fmt=["%.2f", "%.2f", "%.2f", "%.2f", "%d"], header="x,y,height_m,crown_r_m,kind", comments="")
     (d / "trees_palette.json").write_text(json.dumps(pal, indent=1), encoding="utf-8")
     prof = np.genfromtxt(d / "road_profile.csv", delimiter=",", names=True)
-    plot(d / "trees.png", t, kind, prof["x"], prof["y"])
-    n = np.bincount(kind, minlength=3)
-    print(f"{len(t)} trees: {n[0]} pines, {n[1]} broadleaf, {n[2]} shrubs; height median "
-          f"{np.median(t[:, 2]):.1f} m, max {t[:, 2].max():.1f} m; palette {pal}")
+    plot(d / "trees.png", t[kind < 3], kind[kind < 3], prof["x"], prof["y"])
+    n = np.bincount(kind, minlength=4)
+    tall = kind < 3
+    print(f"{tall.sum()} trees: {n[0]} pines, {n[1]} broadleaf, {n[2]} small trees; height median "
+          f"{np.median(t[tall, 2]):.1f} m, max {t[tall, 2].max():.1f} m; palette {pal}")
+    print(f"{n_sh} bushes on the low vegetation within {q['shrub_max_distance_m']:.0f} m of the road")
     print(f"→ {d / 'trees.csv'}\n→ {d / 'trees.png'}")
 
 

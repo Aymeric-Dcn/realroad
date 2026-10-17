@@ -153,9 +153,34 @@ def tree_atlas(path, palette, seed=7):
 
 
 # cell index of each kind in the atlas (pine has two variants)
-TREE_CELL = {0: (0, 1), 1: (2,), 2: (3,)}
-# share of the billboard width taken by the crown in each cell
-TREE_WIDTH_FACTOR = {0: 1.25, 1: 1.15, 2: 1.15}
+TREE_CELL = {0: (0, 1), 1: (2,), 2: (3,), 3: (3,)}
+# share of the billboard width taken by the crown in each cell (3: low bush)
+TREE_WIDTH_FACTOR = {0: 1.25, 1: 1.15, 2: 1.15, 3: 1.3}
+
+FOLIAGE_CELLS = 4
+FOLIAGE_CELL = {0: 0, 1: 2, 2: 3}   # pine (0 or 1), broadleaf, shrub
+
+
+def foliage_atlas(path, palette, seed=17):
+    """Square leafy clumps (512 x 512 each) for the foliage cards placed
+    inside the crowns: 0, 1 pine needles (darker, ragged), 2 broadleaf, 3 shrub."""
+    palette = foliage_palette(palette)
+    cells = []
+    for i, name in enumerate(("pine", "pine", "broadleaf", "shrub")):
+        rng = np.random.default_rng(seed + i)
+        w = h = 512
+        n = 9 if name == "pine" else 7
+        clumps = [(w / 2 + rng.normal(0, 0.13 * w), h / 2 + rng.normal(0, 0.13 * h),
+                   rng.uniform(0.16, 0.26) * w, rng.uniform(0.12, 0.2 if name == "pine" else 0.24) * h)
+                  for _ in range(n)]
+        alpha, col = _crown(rng, clumps, palette[name], w=w, h=h, density=0.95)
+        rgba = np.zeros((h, w, 4), np.float32)
+        rgba[..., :3] = col
+        rgba[..., 3] = alpha
+        cells.append(rgba)
+    atlas = bleed(np.concatenate(cells, axis=1))
+    Image.fromarray((np.clip(atlas, 0, 1) * 255).astype(np.uint8), "RGBA").save(path)
+    return path
 
 
 def facade_texture(path, seed=11, w=512, h=384):
