@@ -65,6 +65,12 @@ DEFAULTS = {
     "buildings_max_m": 200.0,
     "buildings_min_area_m2": 15.0,
     "buildings_skip_light": True,    # BD TOPO construction_legere (sheds, greenhouses)
+    "shaders": "advanced",       # "advanced": Kunos detail / normal-mapped shaders (road, rock, terrain);
+                                 # "basic": plain ksPerPixel everywhere (v0.5 look)
+    "rock_slope_deg": 38.0,      # bare (not green on the photo) triangles steeper than this, and all
+                                 # faces steeper than 62°, get the rock material
+    "rock_repeat_m": 4.0,
+    "terrain_mask_px": 256,      # resolution of the terrain shader masks (per 400 m orthophoto tile)
     "csp_trees": "auto",         # CSP 3D trees (trees3d.py): auto = when data/<name>/csp_trees/*.bin exist
     "furniture": True,           # guard rails, walls, edge posts, signs, poles (furniture.py)
     "furniture_posts": True,     # J6 edge posts (laid out by the rules, not surveyed)
@@ -613,6 +619,62 @@ def build_backdrop(st_x, st_y, d, p):
     return meshes
 
 
+def apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n_rock):
+    """Kunos shaders with detail and normal maps (setups copied from Kunos
+    tracks): the road gets asphalt grain, relief and specular maps
+    (ksPerPixelMultiMap_NMDetail), steep faces a limestone rock texture with
+    relief (ksPerPixelNM), the terrain near the road the orthophoto plus
+    rock / grass / gravel detail layers chosen by a mask made from the photo
+    colours and the slope (ksMultilayer_fresnel_nm)."""
+    from PIL import Image
+
+    from textures import road_textures, rock_textures, terrain_detail_textures, terrain_mask
+
+    # road: diffuse with a (nearly) black alpha = the detail texture shows everywhere
+    road_textures(tex, tex / "asphalt.png")
+    a = Image.open(tex / "asphalt.png").convert("RGB")
+    a.putalpha(Image.new("L", a.size, 5))
+    a.save(tex / "asphalt_a.png")
+    materials["road"] = {"texture": "asphalt_a.png", "shader": "ksPerPixelMultiMap_NMDetail", "kind": "road_adv",
+                         "dds": "dxt5", "maps": [["txNormal", 1, "road_nm.png", "dxt1"],
+                                                 ["txMaps", 2, "road_maps.png", "dxt1"],
+                                                 ["txDetail", 3, "road_detail.png", "dxt5"],
+                                                 ["txNormalDetail", 4, "road_detail_nm.png", "dxt1"]]}
+    if n_rock:
+        rock_textures(tex)
+        materials["rock"] = {"texture": "rock.png", "shader": "ksPerPixelNM", "kind": "rock",
+                             "maps": [["txNormal", 1, "rock_nm.png", "dxt1"]]}
+    terrain_detail_textures(tex)
+    n = p["terrain_mask_px"]
+    n_ml = 0
+    for t_ in ortho:
+        mname = f"ortho_{int(t_['bounds'][0])}_{int(t_['bounds'][1])}"
+        if mname not in near_mats or mname in far_only or mname not in materials:
+            continue
+        x0_, y0_, x1_, y1_ = t_["bounds"]
+        img = np.asarray(Image.open(t_["file"]).convert("RGB").resize((n, n), Image.BILINEAR), np.float32) / 255
+        px_ = (x1_ - x0_) / n
+        gx = x0_ + (np.arange(n) + 0.5) * px_
+        gy = y1_ - (np.arange(n) + 0.5) * px_
+        GX, GY = np.meshgrid(gx, gy)
+        z = dtm.sample(GX.ravel(), GY.ravel()).reshape(n, n)
+        z = np.where(np.isfinite(z), z, np.nanmean(z) if np.isfinite(z).any() else 0.0)
+        dzy, dzx = np.gradient(z, px_)
+        slope = np.degrees(np.arctan(np.hypot(dzx, dzy)))
+        m = terrain_mask(img, slope)
+        Image.fromarray((m * 255 + 0.5).clip(0, 255).astype(np.uint8), "RGBA").save(tex / f"mask_{mname}.png")
+        materials[mname] = {"texture": t_["file"].name, "shader": "ksMultilayer_fresnel_nm", "kind": "terrain_ml",
+                            "maps": [["txMask", 1, f"mask_{mname}.png", "dxt5"],
+                                     ["txDetailR", 2, "det_rock.png", "dxt5"],
+                                     ["txDetailG", 3, "det_grass.png", "dxt5"],
+                                     ["txDetailB", 4, "det_soil.png", "dxt5"],
+                                     ["txDetailA", 5, "det_grass.png", "dxt5"],
+                                     ["txDetailNM", 21, "det_flat_nm.png", "dxt1"]]}
+        n_ml += 1
+    print(f"  shaders: road with detail and relief, {n_rock:,} rock triangles, {n_ml} terrain tiles "
+          f"with detail layers")
+
+
 def ortho_tile_list(ortho_dir, pattern="ortho_*.jpg"):
     tiles = []
     for jpg in sorted(Path(ortho_dir).glob(pattern)):
@@ -723,6 +785,8 @@ def main():
         return np.column_stack([v[:, 0] - x0, v[:, 1] - y0, v[:, 2] - z0]).astype(np.float32)
 
     arrays, objects = {}, []
+    half = np.maximum(-frame["right"], frame["left"])
+    axis_tree = cKDTree(np.column_stack([x, y]))
 
     def add(name, material, verts, faces, uvs, physical_surface=None, smooth_shading=True, keep_winding=False,
             **extra):
@@ -734,6 +798,50 @@ def main():
         objects.append({"name": name, "material": material, "key": i,
                         "surface": physical_surface, "smooth": smooth_shading,
                         "verts": int(len(verts)), "tris": int(len(faces)), **extra})
+
+    advanced = p["shaders"] == "advanced"
+    cos_rock = math.cos(math.radians(p["rock_slope_deg"]))
+    cos_cliff = math.cos(math.radians(62.0))
+    from roadside import OrthoSampler
+
+    ortho_sampler_any = OrthoSampler(ortho)
+    n_rock = [0]
+
+    def add_split(name, material, verts, faces, uvs, surface):
+        """Steep triangles (rock faces, road cuts) get the rock material, mapped
+        along the road (u = station, v = height) so the texture is not stretched
+        down the face like the orthophoto is; the rest keeps its material."""
+        if not advanced:
+            add(name, material, verts, faces, uvs, surface)
+            return
+        a_, b_, c_ = verts[faces[:, 0]], verts[faces[:, 1]], verts[faces[:, 2]]
+        nrm = np.cross(b_ - a_, c_ - a_)
+        nz = np.abs(nrm[:, 2]) / np.maximum(np.linalg.norm(nrm, axis=1), 1e-9)
+        steep = nz < cos_rock
+        if steep.any():
+            # bare rock only: on the photo, not green and not dark (steep wooded
+            # slopes are common); near-vertical faces always
+            cen = (a_[steep] + b_[steep] + c_[steep]) / 3
+            col = ortho_sampler_any.colours(cen[:, 0], cen[:, 1]) / 255.0
+            bare = (col.mean(1) > 0.36) & (col[:, 1] - (col[:, 0] + col[:, 2]) / 2 < 0.03)
+            idx = np.flatnonzero(steep)
+            steep[idx[~(bare | (nz[steep] < cos_cliff))]] = False
+        if steep.any():
+            fs = faces[steep]
+            used = np.unique(fs)
+            remap = -np.ones(len(verts), np.int64)
+            remap[used] = np.arange(len(used))
+            rv = verts[used]
+            ks_ = axis_tree.query(rv[:, :2])[1]
+            ruv = np.column_stack([s[ks_] / p["rock_repeat_m"], rv[:, 2] / p["rock_repeat_m"]])
+            add(name + "_rock", "rock", rv, remap[fs].astype(np.int32), ruv, surface)
+            n_rock[0] += int(steep.sum())
+            faces = faces[~steep]
+        if len(faces):
+            used = np.unique(faces)
+            remap = -np.ones(len(verts), np.int64)
+            remap[used] = np.arange(len(used))
+            add(name, material, verts[used], remap[faces].astype(np.int32), uvs[used], surface)
 
     # AC physics: mesh names "<n><SURFACE>" where SURFACE is a key of surfaces.ini
     phys = {"ROAD": 0, "GRASS": 0, "WALL": 0}
@@ -783,8 +891,8 @@ def main():
                     img.save(tex / f"{mname}.jpg", quality=90)
                     materials[mname] = {"texture": f"{mname}.jpg", "kind": "terrain"}
                     vv = np.column_stack([VX[rs].ravel(), VY[rs].ravel(), VZ[rs].ravel()])
-                    add(phys_name("GRASS", f"verge_{side[0]}{ci:03d}_{a_}"), mname, vv,
-                        grid_faces(b_ - a_ + 1, VX.shape[1]), puv, "GRASS")
+                    add_split(phys_name("GRASS", f"verge_{side[0]}{ci:03d}_{a_}"), mname, vv,
+                              grid_faces(b_ - a_ + 1, VX.shape[1]), puv, "GRASS")
                     cov_all.append(cov)
                     if n_roadside[0] % 50 == 0:
                         print(f"    {n_roadside[0]} roadside textures", flush=True)
@@ -802,7 +910,7 @@ def main():
                     vuv = np.column_stack([np.clip((gx_.ravel() - bx0) / (bx1 - bx0), 0, 1),
                                            np.clip((gy_.ravel() - by0) / (by1 - by0), 0, 1)])
                     mname = use_tile(t_)
-                    add(phys_name("GRASS", f"verge_{side[0]}{ci:03d}_{ri}"), mname, vv,
+                    add_split(phys_name("GRASS", f"verge_{side[0]}{ci:03d}_{ri}"), mname, vv,
                         grid_faces(b_ - a_ + 1, VX.shape[1]), vuv, "GRASS")
             else:
                 vv = np.column_stack([VX.ravel(), VY.ravel(), VZ.ravel()])
@@ -827,7 +935,7 @@ def main():
         mname = f"ortho_{int(tile['bounds'][0])}_{int(tile['bounds'][1])}"
         materials[mname] = tile["file"].name
         shutil.copy(tile["file"], tex / tile["file"].name)
-        add(phys_name("GRASS", f"terrain_{mname[6:]}"), mname, verts, faces, uvs, "GRASS")
+        add_split(phys_name("GRASS", f"terrain_{mname[6:]}"), mname, verts, faces, uvs, "GRASS")
     near_mats = set(materials)
     for tile, verts, faces, uvs in far:
         mname = f"ortho_{int(tile['bounds'][0])}_{int(tile['bounds'][1])}"
@@ -934,6 +1042,8 @@ def main():
                     paint_lines=painted is None and p["markings"] != "none")
     if "verge" in materials:
         verge_texture(tex / "verge.png")
+    if advanced:
+        apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n_rock[0])
 
     dm = dummies(s, x, y, frame, p)
     for dd in dm:

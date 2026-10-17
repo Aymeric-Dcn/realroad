@@ -387,3 +387,161 @@ def furniture_textures(tex_dir, towns):
     dl.rectangle([0, 0, 255, 6], fill=col)
     L.save(tex_dir / "pylon.png")
     return signs_atlas(tex_dir / "signs.png", towns)
+
+
+# ------------------------------------------------- advanced shader textures
+# Detail / normal textures for the Kunos shaders used when track.shaders is
+# "advanced": road (ksPerPixelMultiMap_NMDetail), rock faces (ksPerPixelNM),
+# terrain (ksMultilayer_fresnel_nm: orthophoto + mask + detail layers).
+# Values calibrated on Kunos tracks (black_cat_county): detail textures are
+# colour photos of mean ~0.55-0.65 with specular in alpha (~0.15), terrain
+# masks sum to 1 over R, G, B with A = 0.
+
+def pnoise(n, rng, scales=((64, 1.0), (16, 0.5), (4, 0.25))):
+    """Tileable fractal noise in [0, 1], n x n: white noise low-passed in the
+    Fourier domain (periodic by construction). scales: (period px, weight)."""
+    fy = np.fft.fftfreq(n)[:, None]
+    fx = np.fft.fftfreq(n)[None, :]
+    f = np.sqrt(fx * fx + fy * fy)
+    out = np.zeros((n, n))
+    for period, wgt in scales:
+        spec = np.fft.fft2(rng.standard_normal((n, n)))
+        g = np.exp(-(f * period) ** 2 * 4.0)
+        layer = np.real(np.fft.ifft2(spec * g))
+        layer /= layer.std() + 1e-9
+        out += wgt * layer
+    out -= out.min()
+    return out / max(out.max(), 1e-9)
+
+
+def pcells(n, rng, count, squash=1.0):
+    """Tileable Voronoi: distance to the nearest and second nearest seed
+    (periodic), and the cell index."""
+    pts = rng.uniform(0, n, (count, 2))
+    yy, xx = np.mgrid[0:n, 0:n].astype(np.float32)
+    d1 = np.full((n, n), 1e9, np.float32)
+    d2 = np.full((n, n), 1e9, np.float32)
+    lab = np.zeros((n, n), np.int32)
+    for i, (px, py) in enumerate(pts):
+        dx = np.abs(xx - px)
+        dx = np.minimum(dx, n - dx)
+        dy = np.abs(yy - py)
+        dy = np.minimum(dy, n - dy) * squash
+        d = np.sqrt(dx * dx + dy * dy)
+        nearer = d < d1
+        d2 = np.where(nearer, d1, np.minimum(d2, d))
+        lab = np.where(nearer, i, lab)
+        d1 = np.where(nearer, d, d1)
+    return d1, d2, lab
+
+
+def normal_map(hgt, strength):
+    """Tileable tangent-space normal map (RGB uint8) from a height field."""
+    gx = (np.roll(hgt, -1, 1) - np.roll(hgt, 1, 1)) * 0.5
+    gy = (np.roll(hgt, -1, 0) - np.roll(hgt, 1, 0)) * 0.5
+    n = np.dstack([-gx * strength, gy * strength, np.ones_like(hgt)])
+    n /= np.linalg.norm(n, axis=2, keepdims=True)
+    return ((n * 0.5 + 0.5) * 255 + 0.5).astype(np.uint8)
+
+
+def _save_rgb(path, rgb):
+    Image.fromarray(np.clip(rgb * 255 + 0.5, 0, 255).astype(np.uint8)).save(path)
+
+
+def _save_rgba(path, rgb, a):
+    Image.fromarray(np.clip(np.dstack([rgb, a]) * 255 + 0.5, 0, 255).astype(np.uint8), "RGBA").save(path)
+
+
+def rock_textures(out, seed=31, n=1024):
+    """Limestone face (Route Napoléon road cuts): light grey-beige, craggy
+    relief, horizontal strata (v = height on the faces), a few vertical
+    fractures and darker run-off streaks. rock.png (diffuse, mean ~0.6) +
+    rock_nm.png. Repeats every 4 m."""
+    rng = np.random.default_rng(seed)
+    crag = np.zeros((n, n))
+    for period, w in ((192, 1.0), (64, 0.6), (20, 0.45), (6, 0.35), (2, 0.2)):
+        nz = pnoise(n, rng, ((period, 1.0),))
+        crag += w * (1 - np.abs(2 * nz - 1))                       # ridged noise
+    crag /= crag.max()
+    rows = np.arange(n)[:, None] / n
+    warp = pnoise(n, rng, ((160, 1.0),))
+    strata = np.abs(np.sin(np.pi * (rows * 7 + 0.35 * warp)))      # bedding planes
+    d1, d2, _ = pcells(n, rng, 18, squash=0.35)                    # tall blocks → vertical fractures
+    frac = np.clip((d2 - d1) / 4.0, 0, 1)
+    # run-off streaks: noise stretched vertically
+    st = pnoise(n // 8, rng, ((6, 1.0), (2, 0.5)))
+    streak = np.asarray(Image.fromarray((st * 255).astype(np.uint8)).resize((n, n), Image.BICUBIC), np.float32) / 255
+    hgt = 0.6 * crag + 0.25 * strata + 0.15 * frac
+    col = np.array([0.76, 0.73, 0.66])[None, None] * (0.6 + 0.5 * hgt)[..., None]
+    col *= (0.8 + 0.2 * frac)[..., None]
+    col *= (0.85 + 0.15 * strata)[..., None]
+    col *= (1.0 - 0.28 * np.clip((streak - 0.55) / 0.3, 0, 1))[..., None] * np.array([1.0, 0.99, 0.97])
+    _save_rgb(out / "rock.png", np.clip(col, 0, 1))
+    Image.fromarray(normal_map(hgt * 255, 0.05)).save(out / "rock_nm.png")
+
+
+def road_textures(out, asphalt_png, seed=41):
+    """Extra maps for the road shader: normal (fine relief of the asphalt
+    texture), maps (R specular, G gloss, B reflection, like Kunos road maps),
+    and a detail grain (2.2 m repeat along) with its normal. The detail is light
+    (mean ~0.8): it adds grain without darkening the road."""
+    rng = np.random.default_rng(seed)
+    a = np.asarray(Image.open(asphalt_png).convert("L"), np.float32) / 255.0
+    Image.fromarray(normal_map(a * 255, 0.08)).save(out / "road_nm.png")
+    h, w = a.shape
+    maps = np.dstack([np.full((h, w), 0.55), np.full((h, w), 0.8), np.full((h, w), 0.45)])
+    maps[..., 0] -= 0.25 * np.clip(a - a.mean(), 0, 1)              # paint is less shiny
+    _save_rgb(out / "road_maps.png", maps)
+    n = 512
+    grain = pnoise(n, rng, ((6, 1.0), (2, 0.8)))
+    stones = pnoise(n, rng, ((3, 1.0),)) > 0.72
+    det = 0.72 + 0.2 * grain + 0.12 * stones
+    spec = np.clip(0.08 + 0.3 * stones, 0, 1)                      # chippings catch the light
+    _save_rgba(out / "road_detail.png", np.repeat(det[..., None], 3, 2) * np.array([1.0, 1.0, 1.01]), spec)
+    Image.fromarray(normal_map((0.6 * grain + 0.4 * stones) * 255, 0.2)).save(out / "road_detail_nm.png")
+
+
+def terrain_detail_textures(out, seed=51, n=1024):
+    """Detail layers of the terrain shader, tileable: R rock (limestone), G
+    dry grass / garrigue ground, B gravel and soil. Neutral-ish colours (the
+    orthophoto gives the hue), mean ~0.6, specular in alpha. Plus a flat
+    normal map for the txDetailNM slot."""
+    rng = np.random.default_rng(seed)
+    # rock: reuse the limestone at terrain scale
+    big = pnoise(n, rng, ((128, 1.0), (32, 0.6), (8, 0.3)))
+    d1, d2, _ = pcells(n, rng, 120)
+    crack = np.clip((d2 - d1) / 5.0, 0, 1)
+    rock = (0.45 + 0.35 * big) * (0.6 + 0.4 * crack)
+    _save_rgba(out / "det_rock.png", rock[..., None] * np.array([1.02, 1.0, 0.94]), np.full((n, n), 0.12))
+    # dry grass: thin vertical-ish strokes seen from above → fibrous noise
+    fib = pnoise(n, rng, ((3, 1.0), (10, 0.6), (40, 0.4)))
+    tuft = pnoise(n, rng, ((24, 1.0),))
+    grass = 0.42 + 0.3 * fib + 0.12 * tuft
+    gcol = grass[..., None] * np.array([1.02, 1.04, 0.86])
+    _save_rgba(out / "det_grass.png", gcol, np.full((n, n), 0.06))
+    # gravel / soil: pebbles on beige ground
+    peb = np.clip((pnoise(n, rng, ((3, 1.0),)) - 0.55) / 0.2, 0, 1)
+    tone = pnoise(n, rng, ((5, 1.0),))
+    soil = 0.45 + 0.25 * pnoise(n, rng, ((16, 1.0), (4, 0.5))) + 0.2 * peb * (0.7 + 0.5 * tone)
+    _save_rgba(out / "det_soil.png", soil[..., None] * np.array([1.05, 1.0, 0.9]), 0.1 + 0.15 * peb)
+    Image.fromarray(np.full((64, 64, 3), (128, 128, 255), np.uint8)).save(out / "det_flat_nm.png")
+
+
+def terrain_mask(ortho_rgb, slope_deg):
+    """Mask of the terrain shader for one orthophoto tile: R rock (steep or
+    bright bare limestone), B gravel / soil (beige, low saturation), G the
+    rest (vegetation, grass). R + G + B = 1, A = 0. ortho_rgb in [0, 1]."""
+    from scipy.ndimage import gaussian_filter
+
+    r, g, b = ortho_rgb[..., 0], ortho_rgb[..., 1], ortho_rgb[..., 2]
+    lum = ortho_rgb.mean(2)
+    sat = ortho_rgb.max(2) - ortho_rgb.min(2)
+    rock = np.clip((slope_deg - 32) / 18, 0, 1)
+    grey = np.clip((0.14 - sat) / 0.08, 0, 1)
+    rock = np.maximum(rock, np.clip((lum - 0.5) / 0.12, 0, 1) * grey)            # bare limestone
+    soil = np.clip((lum - 0.34) / 0.1, 0, 1) * np.maximum(grey, np.clip((r - g + 0.03) / 0.06, 0, 1))
+    rock = gaussian_filter(rock, 1.5)
+    soil = gaussian_filter(soil, 1.5) * (1 - rock)
+    grass = np.clip(1 - rock - soil, 0, 1)
+    tot = rock + soil + grass + 1e-6
+    return np.dstack([rock / tot, grass / tot, soil / tot, np.zeros_like(lum)])

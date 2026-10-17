@@ -96,6 +96,7 @@ arbres plats : `track.csp_trees: false`.
 | Pas d'arbres / de bâtiments | ces étapes sont facultatives : relancer `python fetch.py mnh` / `python fetch.py buildings` |
 | Pas de glissières ni de murets | relancer `python fetch.py roadside` (points LiDAR hors sol, quelques Mo) |
 | Trop de buissons | `trees: {shrubs: false}` ou `shrub_max_distance_m: 20`, puis `python realroad.py --from trees --install "…"` |
+| Rendu trop sombre / trop clair, détail trop gros | `track.shaders: basic` (ancien rendu), ou régler `track.materials` (`terrain_ml: {magicMult: …, multG: …}`, `road_adv`, `rock`) |
 | Balises J6 gênantes | `track.furniture_posts: false` ; tout le mobilier : `track.furniture: false` |
 | Herbe CSP absente / partout | ajuster `[GRASS_FX]` dans `content\tracks\<id>\extension\ext_config.ini` (seuils `MASK_…`), ou supprimer la section |
 
@@ -206,6 +207,7 @@ trees in 3D (list `extension\trees\realroad_trees.txt`). Back to flat trees:
 | No trees / buildings | these steps are optional: run `python fetch.py mnh` / `python fetch.py buildings` again |
 | No guard rails or walls | run `python fetch.py roadside` (above-ground LiDAR points, a few MB) |
 | Too many bushes | `trees: {shrubs: false}` or `shrub_max_distance_m: 20`, then `python realroad.py --from trees --install "…"` |
+| Too dark / too bright, detail too big | `track.shaders: basic` (old look), or tune `track.materials` (`terrain_ml: {magicMult: …, multG: …}`, `road_adv`, `rock`) |
 | Edge posts in the way | `track.furniture_posts: false`; all the furniture: `track.furniture: false` |
 | CSP grass missing / everywhere | tune `[GRASS_FX]` in `content\tracks\<id>\extension\ext_config.ini` (the `MASK_…` thresholds), or delete the section |
 

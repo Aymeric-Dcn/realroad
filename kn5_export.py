@@ -47,6 +47,19 @@ MATERIALS = {
     # scaled down like the terrain
     "trees": {"ksAmbient": 0.38, "ksDiffuse": 0.18, "ksSpecular": 0.0, "ksSpecularEXP": 1.0, "ksAlphaRef": 0.3},
     "facade": {"ksAmbient": 0.30, "ksDiffuse": 0.30, "ksSpecular": 0.05, "ksSpecularEXP": 10.0},
+    # advanced shaders (track.shaders: advanced), parameters as on Kunos tracks
+    # (black_cat_county), brightness matched to the basic look above
+    "road_adv": {"ksAmbient": 0.37, "ksDiffuse": 0.44, "ksSpecular": 0.6, "ksSpecularEXP": 20.0,
+                 "fresnelC": 0.015, "fresnelEXP": 15.0, "fresnelMaxLevel": 0.15, "isAdditive": 0.0,
+                 "useDetail": 1.0, "detailUVMultiplier": 12.0, "shadowBiasMult": 0.0, "detailNormalBlend": 0.75},
+    "rock": {"ksAmbient": 0.30, "ksDiffuse": 0.28, "ksSpecular": 0.08, "ksSpecularEXP": 6.0,
+             "fresnelC": 0.0, "fresnelEXP": 0.0, "nmObjectSpace": 0.0, "isAdditive": 0.0, "fresnelMaxLevel": 0.0},
+    # multR/G/B: detail repeats per metre (rock 16 m, grass 4 m, gravel 5 m);
+    # magicMult ≈ 1 / mean of the detail textures (0.62) so the photo keeps its brightness
+    "terrain_ml": {"ksAmbient": 0.28, "ksDiffuse": 0.22, "ksSpecular": 0.04, "ksSpecularEXP": 10.0,
+                   "multR": 0.0625, "multG": 0.25, "multB": 0.2, "multA": 0.0, "magicMult": 1.6,
+                   "fresnelC": 0.0, "fresnelEXP": 3.0, "fresnelMaxLevel": 0.0,
+                   "tarmacSpecularMultiplier": 0.0, "detailNMMult": 0.0},
     # road furniture: galvanised steel (guard rails, poles), road signs
     "metal": {"ksAmbient": 0.32, "ksDiffuse": 0.40, "ksSpecular": 0.35, "ksSpecularEXP": 25.0},
     "sign": {"ksAmbient": 0.42, "ksDiffuse": 0.42, "ksSpecular": 0.10, "ksSpecularEXP": 12.0},
@@ -184,6 +197,54 @@ def dds_dxt1(img, size=None):
     return _dds_header(w, h, len(data[0]), levels) + b"".join(data)
 
 
+def _alpha_blocks(a):
+    """DXT5 alpha blocks of an (H, W) uint8 alpha (H, W multiples of 4):
+    min/max endpoints, 8-level mode."""
+    h, w = a.shape
+    b = a.reshape(h // 4, 4, w // 4, 4).transpose(0, 2, 1, 3).reshape(-1, 16).astype(np.float32)
+    a0, a1 = b.max(1), b.min(1)
+    span = np.maximum(a0 - a1, 1e-6)
+    # palette of the a0 > a1 mode: index 0 = a0, 1 = a1, 2..7 interpolated
+    t = np.rint((a0[:, None] - b) / span[:, None] * 7).astype(np.int32)       # 0 = a0 … 7 = a1
+    code = np.choose(np.clip(t, 0, 7), [0, 2, 3, 4, 5, 6, 7, 1]).astype(np.uint64)
+    code[a0 == a1] = 0
+    bits = (code << (3 * np.arange(16, dtype=np.uint64))).sum(1, dtype=np.uint64)
+    out = np.zeros((len(b), 8), np.uint8)
+    out[:, 0] = a0.astype(np.uint8)
+    out[:, 1] = a1.astype(np.uint8)
+    for k in range(6):
+        out[:, 2 + k] = ((bits >> np.uint64(8 * k)) & np.uint64(255)).astype(np.uint8)
+    return out
+
+
+def dds_dxt5(img, size=None):
+    """PIL image → DXT5 .dds (colour + interpolated alpha) with mipmaps: for
+    textures whose alpha the shader reads (detail blend, specular, masks)."""
+    img = img.convert("RGBA")
+    if size is None:
+        size = tuple(min(4096, max(4, 1 << round(math.log2(max(1, s))))) for s in img.size)
+    if img.size != size:
+        img = img.resize(size, Image.LANCZOS)
+    w, h = size
+    levels, data = 0, []
+    cur = img
+    while True:
+        cw, ch = cur.size
+        a = np.asarray(cur if (cw >= 4 and ch >= 4) else cur.resize((max(4, cw), max(4, ch)), Image.NEAREST))
+        col = np.frombuffer(dxt1_blocks(np.ascontiguousarray(a[..., :3])), np.uint8).reshape(-1, 8)
+        alp = _alpha_blocks(np.ascontiguousarray(a[..., 3]))
+        data.append(np.concatenate([alp, col], axis=1).tobytes())
+        levels += 1
+        if cw == 1 and ch == 1:
+            break
+        cur = cur.resize((max(1, cw // 2), max(1, ch // 2)), Image.BOX)
+    hdr = struct.pack("<4sIIIIIII", b"DDS ", 124, 0xA1007, h, w, len(data[0]), 0, levels)
+    hdr += b"\0" * 44
+    hdr += struct.pack("<II4s5I", 32, 4, b"DXT5", 0, 0, 0, 0, 0)
+    hdr += struct.pack("<5I", 0x401008, 0, 0, 0, 0)
+    return hdr + b"".join(data)
+
+
 def dds_rgba(img, size, alpha_ref=0.3):
     """PIL image → uncompressed 32-bit BGRA .dds with mipmaps. The alpha of each
     mip level is rescaled so that the share of pixels above alpha_ref stays the
@@ -224,6 +285,17 @@ def dds_rgba(img, size, alpha_ref=0.3):
     hdr += struct.pack("<5I", 0x401008, 0, 0, 0, 0)
     assert len(hdr) == 128
     return hdr + b"".join(data)
+
+
+def _cached_rgba(dds_cache, src, size):
+    cached = dds_cache / f"{src.stem}_{src.stat().st_size}_{size[0]}x{size[1]}_rgba2.dds"
+    if cached.exists():
+        return cached.read_bytes()
+    dds = dds_rgba(Image.open(src), size)
+    part = cached.with_suffix(".part")
+    part.write_bytes(dds)
+    part.replace(cached)
+    return dds
 
 
 def _dds_header(w, h, top_size, levels):
@@ -271,7 +343,10 @@ class Kn5Writer:
         self.u32(len(data))
         self.raw(data)
 
-    def material(self, name, props, texture, shader="ksPerPixel", alpha_tested=False):
+    def material(self, name, props, textures, shader="ksPerPixel", alpha_tested=False):
+        """textures: kn5 texture name (txDiffuse) or [(slot name, slot index, kn5 texture name)]."""
+        if isinstance(textures, str):
+            textures = [("txDiffuse", 0, textures)]
         self.s(name)
         self.s(shader)
         self.u8(0)    # blend mode: opaque
@@ -286,10 +361,11 @@ class Kn5Writer:
             self.f32(0.0, 0.0)                           # value B
             self.f32(*((v, v, v) if k == "ksEmissive" else (0.0, 0.0, 0.0)))  # value C
             self.f32(0.0, 0.0, 0.0, 0.0)                 # value D
-        self.i32(1)
-        self.s("txDiffuse")
-        self.i32(0)
-        self.s(texture)
+        self.i32(len(textures))
+        for slot, idx, tex in textures:
+            self.s(slot)
+            self.i32(idx)
+            self.s(tex)
 
     def dummy(self, name, matrix, n_children):
         self.i32(1)
@@ -563,7 +639,7 @@ def preview_png(man, P, tex_dir, size=(355, 200)):
     for name, f in man["materials"].items():
         if name.startswith("ortho_"):
             _, ex, ny = name.split("_")
-            tiles.append((float(ex) - x0, float(ny) - y0, tex_dir / f))
+            tiles.append((float(ex) - x0, float(ny) - y0, tex_dir / (f["texture"] if isinstance(f, dict) else f)))
     if not tiles:
         return None
     ex, nz = P[:, 0], -P[:, 2]  # back to east/north
@@ -711,42 +787,66 @@ def main():
     with open(tmp, "wb") as f:
         w = Kn5Writer(f)
         w.header()
-        w.i32(len(mat_names))
         tex_size = {}
         specs = {m: (v if isinstance(v, dict) else {"texture": v}) for m, v in man["materials"].items()}
-        for i, m in enumerate(mat_names):
+
+        def encode(src, size, enc):
+            """DDS bytes of a texture, cached (re-exports and interrupted runs are fast)."""
+            tag = "" if enc == "dxt1" else f"_{enc}"            # DXT1 names as before: old caches stay valid
+            cached = dds_cache / f"{src.stem}_{src.stat().st_size}_{size[0]}x{size[1]}{tag}.dds"
+            if cached.exists():
+                return cached.read_bytes()
+            img = Image.open(src)
+            dds = {"rgba": lambda: dds_rgba(img, size), "dxt5": lambda: dds_dxt5(img, size)}.get(
+                enc, lambda: dds_dxt1(img, size))()
+            part = cached.with_suffix(".part")
+            part.write_bytes(dds)
+            part.replace(cached)
+            return dds
+
+        def pow2(src, cap):
+            with Image.open(src) as im:
+                return tuple(min(cap, max(4, 1 << round(math.log2(s_)))) for s_ in im.size)
+
+        # texture table: each material's diffuse (named after the material, as
+        # before) + the extra maps of the advanced shaders (shared by file)
+        tex_table = []           # (kn5 name, source, size, encoding)
+        extra_names = {}
+        for m in mat_names:
             spec = specs[m]
             src = tex_dir / spec["texture"]
-            img = Image.open(src)
             if m in far_only:
                 size = (p["ortho_far_texture_px"],) * 2
             elif m.startswith("ortho_"):
                 size = (p["ortho_texture_px"],) * 2
             else:
-                size = tuple(min(p["max_texture_px"], max(4, 1 << round(math.log2(s)))) for s in img.size)
-            # encoded textures are cached: re-exports (and interrupted runs) are fast
-            alpha = bool(spec.get("alpha"))
-            cached = dds_cache / f"{src.stem}_{src.stat().st_size}_{size[0]}x{size[1]}{'_rgba2' if alpha else ''}.dds"
-            if cached.exists():
-                dds = cached.read_bytes()
-            else:
-                dds = dds_rgba(img, size) if alpha else dds_dxt1(img, size)
-                part = cached.with_suffix(".part")
-                part.write_bytes(dds)
-                part.replace(cached)
+                size = pow2(src, p["max_texture_px"])
+            enc = spec.get("dds") or ("rgba2" if spec.get("alpha") else "dxt1")
+            enc = "rgba" if enc == "rgba2" else enc
             tex_size[m] = size
-            w.texture(f"{m}.dds", dds)
-            if (i + 1) % 10 == 0 or i + 1 == len(mat_names):
-                print(f"  textures {i + 1}/{len(mat_names)}", flush=True)
+            tex_table.append((f"{m}.dds", src, size, enc))
+            for slot, idx, fname, fenc in spec.get("maps", []):
+                if fname not in extra_names:
+                    fsrc = tex_dir / fname
+                    extra_names[fname] = f"x_{Path(fname).stem}.dds"
+                    tex_table.append((extra_names[fname], fsrc, pow2(fsrc, p["max_texture_px"]), fenc))
+        w.i32(len(tex_table))
+        for i, (tname, src, size, enc) in enumerate(tex_table):
+            w.texture(tname, _cached_rgba(dds_cache, src, size) if enc == "rgba" else encode(src, size, enc))
+            if (i + 1) % 10 == 0 or i + 1 == len(tex_table):
+                print(f"  textures {i + 1}/{len(tex_table)}", flush=True)
         w.i32(len(mat_names))
         for m in mat_names:
             spec = specs[m]
             kind = spec.get("kind") or ("terrain" if m.startswith(("ortho_", "backdrop_")) else m)
             props = dict(mats.get(kind, mats["terrain"]))
+            props.update(spec.get("props") or {})
             if spec.get("alpha") and not props.get("ksAlphaRef"):
                 props["ksAlphaRef"] = 0.5          # alpha-tested: cut-out below half opacity
-            w.material(m, props, f"{m}.dds",
-                       shader=spec.get("shader", "ksPerPixel"), alpha_tested=bool(spec.get("alpha")))
+            texs = [("txDiffuse", 0, f"{m}.dds")] + [(slot, idx, extra_names[fname])
+                                                     for slot, idx, fname, _ in spec.get("maps", [])]
+            w.material(m, props, texs, shader=spec.get("shader", "ksPerPixel"),
+                       alpha_tested=bool(spec.get("alpha")))
         # node tree: root → meshes + dummies
         objs = man["objects"]
         w.dummy("realroad", np.eye(4), len(objs) + len(man["dummies"]))
@@ -777,7 +877,7 @@ def main():
         (out / "extension").mkdir(exist_ok=True)
         (out / "extension" / "ext_config.ini").write_text(csp_ext_config(mat_names, trees_list), encoding="utf-8")
     print(f"  {kn5_path.name}: {len(objs)} meshes, {nv:,} vertices, {nt:,} triangles, "
-          f"{len(mat_names)} textures, {kn5_path.stat().st_size / 1e6:.0f} MB")
+          f"{len(tex_table)} textures, {kn5_path.stat().st_size / 1e6:.0f} MB")
 
     # AI spline, map, cameras
     R, L, C = road_line(man, data)

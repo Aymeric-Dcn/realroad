@@ -301,10 +301,16 @@ def fix_bin(bin_path, tex_dir, dst=None):
     """CSP tree .bin = zip archive. Fill the texture entries the converter left
     empty with the generated textures (black trees otherwise). Returns the
     names filled."""
+    import shutil
     import zipfile
 
-    with zipfile.ZipFile(bin_path) as z:
-        items = [(i, z.read(i.filename)) for i in z.infolist()]
+    try:
+        with zipfile.ZipFile(bin_path) as z:
+            items = [(i, z.read(i.filename)) for i in z.infolist()]
+    except zipfile.BadZipFile:            # not an archive (other converter version): copy as it is
+        if dst and Path(dst) != Path(bin_path):
+            shutil.copy(bin_path, dst)
+        return []
     filled = []
     out = []
     for info, data in items:
