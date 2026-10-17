@@ -74,6 +74,10 @@ La piste contient aussi l'AI line (adversaires IA, mode Track Day), la minimap
 | Fichier `.kn5` trop gros | `track.ortho_texture_px: 1024` |
 | Trop d'arbres / jeu qui rame | `trees: {max_trees: 20000}` ou `max_distance_m: 80` dans `config.yaml`, puis `python realroad.py --from trees --install "…"` |
 | Pas d'arbres / de bâtiments | ces étapes sont facultatives : relancer `python fetch.py mnh` / `python fetch.py buildings` |
+| Pas de glissières ni de murets | relancer `python fetch.py roadside` (points LiDAR hors sol, quelques Mo) |
+| Trop de buissons | `trees: {shrubs: false}` ou `shrub_max_distance_m: 20`, puis `python realroad.py --from trees --install "…"` |
+| Balises J6 gênantes | `track.furniture_posts: false` ; tout le mobilier : `track.furniture: false` |
+| Herbe CSP absente / partout | ajuster `[GRASS_FX]` dans `content\tracks\<id>\extension\ext_config.ini` (seuils `MASK_…`), ou supprimer la section |
 
 ### Ancienne méthode (Blender + ksEditor)
 
@@ -161,6 +165,10 @@ The track also has an AI line (AI opponents, Track Day mode), a minimap
 | `.kn5` file too big | `track.ortho_texture_px: 1024` |
 | Too many trees / low frame rate | `trees: {max_trees: 20000}` or `max_distance_m: 80` in `config.yaml`, then `python realroad.py --from trees --install "…"` |
 | No trees / buildings | these steps are optional: run `python fetch.py mnh` / `python fetch.py buildings` again |
+| No guard rails or walls | run `python fetch.py roadside` (above-ground LiDAR points, a few MB) |
+| Too many bushes | `trees: {shrubs: false}` or `shrub_max_distance_m: 20`, then `python realroad.py --from trees --install "…"` |
+| Edge posts in the way | `track.furniture_posts: false`; all the furniture: `track.furniture: false` |
+| CSP grass missing / everywhere | tune `[GRASS_FX]` in `content\tracks\<id>\extension\ext_config.ini` (the `MASK_…` thresholds), or delete the section |
 
 ### Old route (Blender + ksEditor)
 

@@ -65,6 +65,12 @@ DEFAULTS = {
     "buildings_max_m": 200.0,
     "buildings_min_area_m2": 15.0,
     "buildings_skip_light": True,    # BD TOPO construction_legere (sheds, greenhouses)
+    "furniture": True,           # guard rails, walls, edge posts, signs, poles (furniture.py)
+    "furniture_posts": True,     # J6 edge posts (laid out by the rules, not surveyed)
+    "furniture_lidar_classes": [1, 6, 64, 67],
+    "furniture_min_points": 3,   # LiDAR points per metre of road to count as a barrier
+    "furniture_min_run_m": 10.0,
+    "furniture_power_max_m": 120.0,
     "z_sigma_m": 6.0,
     "crossfall_sigma_m": 10.0,
     "despike_window_m": 15.0,
@@ -864,6 +870,16 @@ def main():
         print(f"  buildings: {n_b} ({n_g} with a gable roof)")
     elif p["buildings"]:
         print("  (no buildings_l93.geojson: run `python fetch.py buildings` for the buildings)")
+    if p["furniture"]:
+        from furniture import Road, build_furniture
+
+        road = Road(s, x, y, frame, dtm, p["verge_m"])
+        fm, fmat, fst, _ = build_furniture(d, road, p, cfg.get("osm_ref_regex"), tex)
+        materials.update(fmat)
+        scen += fm
+        print("  road furniture: " + ", ".join(f"{k.replace('_', ' ')} {v:,}" for k, v in fst.items())
+              + ("" if (d / "roadside_points.npz").exists() else
+                 "  (no LiDAR roadside points: run `python fetch.py roadside` for the guard rails and walls)"))
     for name, mat, sv, sf, suv, keep, *opt in scen:
         opt = dict(opt[0]) if opt else {}
         surface = opt.pop("surface", None)    # "WALL": cars collide with it

@@ -47,6 +47,9 @@ MATERIALS = {
     # scaled down like the terrain
     "trees": {"ksAmbient": 0.38, "ksDiffuse": 0.18, "ksSpecular": 0.0, "ksSpecularEXP": 1.0, "ksAlphaRef": 0.3},
     "facade": {"ksAmbient": 0.30, "ksDiffuse": 0.30, "ksSpecular": 0.05, "ksSpecularEXP": 10.0},
+    # road furniture: galvanised steel (guard rails, poles), road signs
+    "metal": {"ksAmbient": 0.32, "ksDiffuse": 0.40, "ksSpecular": 0.35, "ksSpecularEXP": 25.0},
+    "sign": {"ksAmbient": 0.42, "ksDiffuse": 0.42, "ksSpecular": 0.10, "ksSpecularEXP": 12.0},
 }
 DEFAULTS = {
     "ortho_texture_px": 2048,    # orthophoto tiles are resampled to this (power of two)
@@ -717,7 +720,10 @@ def main():
         for m in mat_names:
             spec = specs[m]
             kind = spec.get("kind") or ("terrain" if m.startswith(("ortho_", "backdrop_")) else m)
-            w.material(m, mats.get(kind, mats["terrain"]), f"{m}.dds",
+            props = dict(mats.get(kind, mats["terrain"]))
+            if spec.get("alpha") and not props.get("ksAlphaRef"):
+                props["ksAlphaRef"] = 0.5          # alpha-tested: cut-out below half opacity
+            w.material(m, props, f"{m}.dds",
                        shader=spec.get("shader", "ksPerPixel"), alpha_tested=bool(spec.get("alpha")))
         # node tree: root → meshes + dummies
         objs = man["objects"]

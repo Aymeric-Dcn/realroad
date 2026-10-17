@@ -31,6 +31,7 @@ backdrop_m: 8000          # fetch.py far: distant relief + imagery out to this d
 trees_margin_m: 250       # fetch.py mnh: canopy height around the road
 buildings_margin_m: 250   # fetch.py buildings
 streetview_step_m: 20     # fetch.py streetview: one Panoramax photo every N metres
+roadside_band_m: 18       # fetch.py roadside: LiDAR above-ground points within this distance of the axis
 # trees:                  # trees.py, e.g.
 #   min_height_m: 3
 #   max_distance_m: 140
@@ -51,10 +52,13 @@ track:
   markings: auto             # auto = real markings (road_markings.py), texture = generic, none
   trees: true                # tree billboards from trees.csv
   buildings: true            # BD TOPO buildings
+  furniture: true            # guard rails, walls, signs, edge posts, poles (fetch.py roadside)
+  furniture_posts: true      # J6 edge posts (laid out by the rules, not surveyed)
   z_sigma_m: 6               # Gaussian smoothing of the LiDAR elevation (bumps vs detail)
   crossfall_sigma_m: 10      # Gaussian smoothing of the crossfall
   z_despike_m: 0.06          # isolated elevation spikes larger than this are removed
   # kn5_export.py
   ortho_texture_px: 2048     # orthophoto texture size in the kn5 (1024 = 4x smaller file)
+  csp_config: true           # extension/ext_config.ini for Custom Shaders Patch (grass, rain)
   # materials:               # ksPerPixel values per material, e.g.
   #   terrain: {ksAmbient: 0.45, ksDiffuse: 0.35}

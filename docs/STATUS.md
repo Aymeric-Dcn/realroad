@@ -1,4 +1,4 @@
-# État du projet / Project status — 17/10/2026
+# État du projet / Project status — 17/10/2026 (v0.5)
 
 ## 🇫🇷
 
@@ -34,8 +34,17 @@ Corrigé (v0.4, à tester) :
   l'accotement (bande de 12 m), poses recalées sur la route, test de cohérence entre deux photos pour
   écarter ce qui n'est pas du sol (voitures, murs, arbres projetés), fondu vers l'ortho au bord.
 
+**Retours du 17/10, fin de matinée (v0.4 roulée)** : « pas mal », vue de la montagne réussie,
+bâtiments OK (dans la réalité les arbres en cachent beaucoup), jouable. Fait ensuite (v0.5, à tester) :
+- **végétation en volume** : cartes de feuillage dans les couronnes près de la route, sous-bois,
+  buissons et haies tirés de la végétation basse du MNH (0,6-3 m, à moins de 35 m) ;
+- **mobilier routier** (`fetch.py roadside` + `furniture.py`) : glissières et murets détectés dans les
+  points LiDAR hors sol (+ OSM), panneaux (limitations OSM, entrées / sorties de village avec le nom,
+  STOP, cédez-le-passage), balises J6 selon les règles, poteaux et pylônes électriques ;
+- **collisions** : glissières, murets, murs des bâtiments, troncs près de la route ;
+- **Custom Shaders Patch** : herbe 3D sur les parties vertes, pluie sur la chaussée.
+
 **Limites connues**
-- Arbres et bâtiments sans collision (on les traverse).
 - Façades génériques (une seule texture) ; arbres stylisés (4 modèles).
 - Bord de route en photos : ne marche bien que sur du sol (accotement, herbe, gravier) ; murs, haies et
   voitures ne peuvent pas être projetés sur un sol plat : il faudra leur géométrie 3D (LiDAR complet).
@@ -71,8 +80,12 @@ Fixed in v0.4:
 - trees use 3 planes with denser, lighter foliage;
 - experimental roadside textured from the street photos.
 
+**Feedback 17/10 late morning (v0.4)**: good, mountain view great, playable. Done next (v0.5, to test):
+vegetation with volume (foliage cards, understory, bushes and hedges from the low canopy), road
+furniture (guard rails and walls from the above-ground LiDAR points + OSM, signs, J6 edge posts,
+poles and pylons), collisions (rails, walls, buildings, trunks near the road), CSP grass and rain.
+
 **Known limits**:
-- no collisions on trees and buildings;
 - generic façades and stylised trees;
 - estimated edges under trees and in Saint-Vallier;
 - paved shoulders treated as verge.

@@ -9,6 +9,8 @@ licence question). Colours come from the orthophoto where possible
                                   0 pine A, 1 pine B, 2 broadleaf, 3 shrub
     facade_texture(path)        → RGB PNG, one 4 m x 3 m bay (wall + window), tiling
 """
+import math
+
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -218,3 +220,170 @@ def facade_texture(path, seed=11, w=512, h=384):
 
 
 FACADE_BAY_M = (4.0, 3.0)   # metres covered by one texture repeat (u, v)
+
+
+# ------------------------------------------------------------ road furniture
+SIGN_W, SIGN_H = 2048, 1024
+SIGN_CELL = 256
+_SIGN_SMALL = ["speed30", "speed50", "speed70", "speed80", "speed90", "stop", "giveway", "back_disc",
+               "back_tri", "back_rect"]
+# town signs (512 x 256): the rest of row 1, then rows 2 and 3
+_TOWN_SLOTS = [(2 * SIGN_CELL + i * 512, SIGN_CELL) for i in range(3)] + \
+              [(i * 512, r * SIGN_CELL) for r in (2, 3) for i in range(4)]
+
+
+def _px_to_uv(x0, y0, w, h):
+    m = 1.5
+    return ((x0 + m) / SIGN_W, 1 - (y0 + h - m) / SIGN_H, (x0 + w - m) / SIGN_W, 1 - (y0 + m) / SIGN_H)
+
+
+def sign_uv(kind):
+    i = _SIGN_SMALL.index(kind)
+    return _px_to_uv((i % 8) * SIGN_CELL, (i // 8) * SIGN_CELL, SIGN_CELL, SIGN_CELL)
+
+
+def _font(size):
+    from PIL import ImageFont
+
+    for name in ("DejaVuSans-Bold.ttf", "arialbd.ttf", "Arial Bold.ttf", "LiberationSans-Bold.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "C:/Windows/Fonts/arialbd.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _fit_text(d, text, box_w, size):
+    while size > 10:
+        f = _font(size)
+        w = d.textlength(text, font=f)
+        if w <= box_w:
+            return f
+        size -= 2
+    return _font(size)
+
+
+RED, WHITE, BLACK, GREY = (200, 30, 35, 255), (245, 245, 240, 255), (20, 20, 22, 255), (150, 152, 150, 255)
+
+
+def signs_atlas(path, towns):
+    """French road signs (shapes and colours of the rules), transparent
+    around them (alpha tested). towns = [(kind, name)], kind town / town_end."""
+    img = Image.new("RGBA", (SIGN_W, SIGN_H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    C = SIGN_CELL
+    for i, k in enumerate(_SIGN_SMALL):
+        x0, y0 = (i % 8) * C, (i // 8) * C
+        cx, cy, r = x0 + C / 2, y0 + C / 2, C / 2 - 6
+        if k.startswith("speed"):
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=RED)
+            ri = r * 0.8
+            d.ellipse([cx - ri, cy - ri, cx + ri, cy + ri], fill=WHITE)
+            f = _fit_text(d, k[5:], ri * 1.45, int(r * 1.05))
+            d.text((cx, cy + 4), k[5:], font=f, fill=BLACK, anchor="mm")
+        elif k == "stop":
+            pts = [(cx + r * math.cos(math.pi / 8 + j * math.pi / 4), cy + r * math.sin(math.pi / 8 + j * math.pi / 4)) for j in range(8)]
+            d.polygon(pts, fill=WHITE)
+            pts = [(cx + 0.92 * r * math.cos(math.pi / 8 + j * math.pi / 4), cy + 0.92 * r * math.sin(math.pi / 8 + j * math.pi / 4)) for j in range(8)]
+            d.polygon(pts, fill=RED)
+            d.text((cx, cy + 3), "STOP", font=_fit_text(d, "STOP", 1.5 * r, int(0.62 * r)), fill=WHITE, anchor="mm")
+        elif k == "giveway":
+            tri = [(x0 + 6, y0 + 14), (x0 + C - 6, y0 + 14), (cx, y0 + C - 8)]
+            d.polygon(tri, fill=RED)
+            sh = 0.2
+            inner = [(tri[0][0] + sh * (cx - tri[0][0]) * 1.0, tri[0][1] + 20), (tri[1][0] - sh * (tri[1][0] - cx), tri[1][1] + 20),
+                     (cx, tri[2][1] - 38)]
+            d.polygon(inner, fill=WHITE)
+        elif k == "back_disc":
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=GREY)
+        elif k == "back_tri":
+            d.polygon([(x0 + 6, y0 + 14), (x0 + C - 6, y0 + 14), (cx, y0 + C - 8)], fill=GREY)
+        elif k == "back_rect":
+            d.rectangle([x0 + 4, y0 + 4 + C / 4, x0 + C - 4, y0 + 3 * C / 4 - 4], fill=GREY)
+    slots = {}
+    for (kind, name), (x0, y0) in zip(towns, _TOWN_SLOTS):
+        w, h = 512, 256
+        d.rectangle([x0 + 4, y0 + 4, x0 + w - 4, y0 + h - 4], fill=RED)
+        d.rectangle([x0 + 22, y0 + 22, x0 + w - 22, y0 + h - 22], fill=WHITE)
+        label = (name or "").upper()
+        if label:
+            words = label.replace("-", "- ").split()
+            lines = [label] if len(label) <= 14 else [" ".join(words[:max(1, len(words) // 2)]).replace("- ", "-"),
+                                                      " ".join(words[max(1, len(words) // 2):]).replace("- ", "-")]
+            fs = 70 if len(lines) == 1 else 52
+            for j, ln in enumerate(lines):
+                f = _fit_text(d, ln, w - 70, fs)
+                yy = y0 + h / 2 + (j - (len(lines) - 1) / 2) * fs * 1.1
+                d.text((x0 + w / 2, yy), ln, font=f, fill=BLACK, anchor="mm")
+        if kind == "town_end":
+            d.line([(x0 + 30, y0 + h - 30), (x0 + w - 30, y0 + 30)], fill=RED, width=22)
+        slots[(kind, name)] = _px_to_uv(x0, y0, w, h)
+    arr = bleed(np.asarray(img, np.float32) / 255.0, iterations=4)   # no dark fringes in the mipmaps
+    Image.fromarray((np.clip(arr, 0, 1) * 255).astype(np.uint8), "RGBA").save(path)
+    return slots
+
+
+def furniture_textures(tex_dir, towns):
+    """All the furniture textures; returns the town sign slots."""
+    rng = np.random.default_rng(23)
+    # galvanised W-beam: bright / dark bands across the height, a little dirt
+    v = np.linspace(0, 1, 64)
+    prof = 0.78 + 0.16 * np.cos(2 * np.pi * (v * 2 - 0.25)) + 0.05 * np.cos(2 * np.pi * v * 6)
+    a = np.repeat(prof[:, None], 256, 1) * (0.95 + 0.05 * rng.random((64, 256)))
+    a = np.clip(a[..., None] * np.array([182, 188, 190]), 0, 255)
+    Image.fromarray(a.astype(np.uint8)).save(tex_dir / "guardrail.png")
+    for name, col in (("post_dark", (92, 96, 98)), ("post_metal", (160, 165, 168))):
+        b = np.clip(np.array(col)[None, None] * (0.9 + 0.1 * rng.random((32, 32, 1))), 0, 255)
+        Image.fromarray(b.astype(np.uint8)).save(tex_dir / f"{name}.png")
+    # dry-stone wall: irregular stones, dark joints (1.5 m per repeat)
+    n = 256
+    pts = rng.uniform(0, n, (90, 2))
+    yy, xx = np.mgrid[0:n, 0:n]
+    best = np.full((n, n), 1e9)
+    second = np.full((n, n), 1e9)
+    lab = np.zeros((n, n), int)
+    for i, (px, py) in enumerate(pts):
+        for ox in (-n, 0, n):
+            for oy in (-n, 0, n):
+                dd = ((xx - px - ox) * 0.8) ** 2 + (yy - py - oy) ** 2
+                nb = dd < best
+                second = np.where(nb, best, np.minimum(second, dd))
+                lab = np.where(nb, i, lab)
+                best = np.where(nb, dd, best)
+    edge = np.sqrt(second) - np.sqrt(best)
+    tone = rng.uniform(0.75, 1.1, len(pts))[lab]
+    base = np.array([168, 156, 136]) * tone[..., None]
+    base *= (0.45 + 0.55 * np.clip(edge / 4.0, 0, 1))[..., None]
+    base *= 0.92 + 0.08 * rng.random((n, n, 1))
+    Image.fromarray(np.clip(base, 0, 255).astype(np.uint8)).save(tex_dir / "stonewall.png")
+    # J6 delineator: left half = right-side post (yellow-orange rectangle),
+    # right half = left-side post (two white dots); v: 0 = 0.2 m under the ground
+    j6 = np.zeros((256, 64, 3), np.uint8)
+    j6[:] = (236, 236, 230)
+    band0, band1 = int(256 * (1 - 0.98)), int(256 * (1 - 0.80))
+    j6[band0:band1] = (25, 25, 25)
+    j6[int(256 * (1 - 0.2)):] = (110, 100, 85)          # buried part
+    jm = Image.fromarray(j6)
+    dj = ImageDraw.Draw(jm)
+    dj.rectangle([10, band0 + 8, 22, band1 - 8], fill=(255, 150, 20))
+    for cy in (band0 + 14, band1 - 14):
+        dj.ellipse([42, cy - 5, 52, cy + 5], fill=(250, 250, 250))
+    jm.save(tex_dir / "j6.png")
+    # wooden pole
+    w_ = np.array([112, 86, 62]) * (0.8 + 0.2 * rng.random((1, 64, 1))) * (0.92 + 0.08 * rng.random((256, 1, 1)))
+    Image.fromarray(np.clip(np.broadcast_to(w_, (256, 64, 3)), 0, 255).astype(np.uint8)).save(tex_dir / "wood.png")
+    # pylon lattice (alpha): edge bars, X bracing, one horizontal per repeat
+    L = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+    dl = ImageDraw.Draw(L)
+    col = (120, 128, 124, 255)
+    dl.rectangle([0, 0, 10, 255], fill=col)
+    dl.rectangle([245, 0, 255, 255], fill=col)
+    dl.line([(0, 0), (255, 255)], fill=col, width=6)
+    dl.line([(255, 0), (0, 255)], fill=col, width=6)
+    dl.rectangle([0, 0, 255, 6], fill=col)
+    L.save(tex_dir / "pylon.png")
+    return signs_atlas(tex_dir / "signs.png", towns)
