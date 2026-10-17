@@ -189,6 +189,11 @@ def dds_rgba(img, size, alpha_ref=0.3):
                 else:
                     hi = mid
             a[..., 3] = np.clip(a[..., 3] * (lo + hi) / 2, 0, 1)
+        # sharpen around the cut: opaque texels well above any alpha reference
+        # (0.75+), clear ones well below (0.1-), so the coverage is the same
+        # whatever threshold the shader really uses (ksTree may ignore ksAlphaRef)
+        al = a[..., 3]
+        a[..., 3] = np.where(al > alpha_ref, 0.75 + 0.25 * (al - alpha_ref) / (1 - alpha_ref), 0.1 * al / alpha_ref)
         bgra = (a[..., [2, 1, 0, 3]] * 255 + 0.5).astype(np.uint8)
         data.append(bgra.tobytes())
         levels += 1
@@ -704,7 +709,7 @@ def main():
                 size = tuple(min(p["max_texture_px"], max(4, 1 << round(math.log2(s)))) for s in img.size)
             # encoded textures are cached: re-exports (and interrupted runs) are fast
             alpha = bool(spec.get("alpha"))
-            cached = dds_cache / f"{src.stem}_{src.stat().st_size}_{size[0]}x{size[1]}{'_rgba' if alpha else ''}.dds"
+            cached = dds_cache / f"{src.stem}_{src.stat().st_size}_{size[0]}x{size[1]}{'_rgba2' if alpha else ''}.dds"
             if cached.exists():
                 dds = cached.read_bytes()
             else:
