@@ -10,6 +10,7 @@ Pipeline stage 1: fetch the open data for one road section.
     python fetch.py mnh      # LiDAR HD canopy height (trees), 50 cm
     python fetch.py buildings  # IGN BD TOPO buildings (footprint, heights) near the road
     python fetch.py streetview # Panoramax street-level photos along the road (open licence)
+    python fetch.py roadside   # objects along the road: OSM barriers / signs + LiDAR above-ground points
     python fetch.py all      # osm + mnt + ortho (LiDAR is heavy, run it separately)
 
 All geometries are in Lambert-93 (EPSG:2154), in metres.
@@ -579,6 +580,90 @@ def cmd_lidar(cfg, remote=False):
         print(f"    → {n:,} points kept, {mb:.1f} MB, {time.time() - t0:.0f} s")
 
 
+# ---------------------------------------------------------------- roadside
+# LiDAR HD classes of things standing beside the road that are not vegetation:
+# 1 unclassified (guard rails, posts, fences often end up here), 6 building,
+# 64 permanent above-ground (walls), 67 miscellaneous built structures.
+ROADSIDE_CLASSES = [1, 6, 64, 67]
+
+
+def cmd_roadside(cfg, remote=True):
+    """What stands along the road: OSM barriers (guard rails, walls), signs and
+    milestones, plus the LiDAR above-ground points of a narrow band (walls,
+    guard rails, posts) used to find them where OSM has nothing."""
+    route = load_route(cfg)
+    band = cfg.get("roadside_band_m", 18)
+    out_dir = cfg["_dir"]
+    # 1. OpenStreetMap
+    lon0, lat0 = TO_WGS.transform(*route.bounds[:2])
+    lon1, lat1 = TO_WGS.transform(*route.bounds[2:])
+    m = 0.003
+    bbox = f"{lat0 - m:.5f},{lon0 - m:.5f},{lat1 + m:.5f},{lon1 + m:.5f}"
+    q = f"""[out:json][timeout:120];
+(
+  way["barrier"]({bbox});
+  node["barrier"]({bbox});
+  node["traffic_sign"]({bbox});
+  node["highway"~"^(milestone|traffic_signals|stop|give_way|street_lamp|bus_stop|speed_camera)$"]({bbox});
+  node["railway"="milestone"]({bbox});
+  way["man_made"~"^(embankment|retaining_wall)$"]({bbox});
+  node["power"~"^(pole|tower)$"]({bbox});
+  node["man_made"="utility_pole"]({bbox});
+  way["highway"]["ref"~"{cfg['osm_ref_regex']}"]["maxspeed"]({bbox});
+  node["place"~"^(village|town|hamlet)$"]({bbox});
+);
+(._;>;); out body;"""
+    try:
+        osm = overpass(q)
+        (out_dir / "osm_roadside.json").write_text(json.dumps(osm), encoding="utf-8")
+        kinds = {}
+        for e in osm["elements"]:
+            t = e.get("tags") or {}
+            k = t.get("barrier") or t.get("traffic_sign") and "traffic_sign" or t.get("highway") \
+                or t.get("power") or t.get("man_made") or t.get("place")
+            if k:
+                kinds[k] = kinds.get(k, 0) + 1
+        print(f"  OSM: {', '.join(f'{v} {k}' for k, v in sorted(kinds.items(), key=lambda kv: -kv[1]))}")
+    except RuntimeError as e:
+        print(f"  ! OSM objects skipped: {e}")
+    # 2. LiDAR above-ground points of a narrow band (non-vegetation classes)
+    area = route.buffer(band, cap_style="flat")
+    tiles = lidar_tiles(area, "url_npl")
+    crop_dir = out_dir / "lidar_roadside"
+    crop_dir.mkdir(parents=True, exist_ok=True)
+    out_name = lambda t: t["name"].replace(".copc.laz", ".laz")
+    todo = [t for t in tiles if not (crop_dir / out_name(t)).exists()
+            and not (crop_dir / (out_name(t) + ".empty")).exists()]
+    print(f"  LiDAR: {len(tiles)} tiles touch the ±{band} m band, {len(todo)} left "
+          f"(classes {ROADSIDE_CLASSES}, {'remote reads' if remote else 'whole tiles'}).")
+    for i, t in enumerate(todo, 1):
+        dst = crop_dir / out_name(t)
+        tmp = dst.with_name(dst.name + ".part.laz")
+        print(f"  [{i}/{len(todo)}] {t['name']}")
+        t0 = time.time()
+        n = None
+        if remote:
+            try:
+                n = crop_copc_remote(t["url"], tmp, area, ROADSIDE_CLASSES, t["bounds"], cell_m=100)
+            except Exception as e:  # rate limit, no Range support…: whole tile instead
+                tmp.unlink(missing_ok=True)
+                print(f"    ! remote read failed ({type(e).__name__}), downloading the whole tile")
+        if n is None:
+            raw = out_dir / "lidar_raw" / t["name"]
+            download(t["url"], raw)
+            n = crop_laz_local(raw, tmp, area, ROADSIDE_CLASSES)
+            if not cfg.get("keep_raw_laz", False):
+                raw.unlink(missing_ok=True)
+        if n == 0:
+            tmp.unlink(missing_ok=True)
+            (crop_dir / (out_name(t) + ".empty")).touch()
+        else:
+            tmp.replace(dst)
+        mb = dst.stat().st_size / 1e6 if dst.exists() else 0
+        print(f"    → {n:,} points kept, {mb:.1f} MB, {time.time() - t0:.0f} s")
+    print(f"→ {crop_dir}")
+
+
 # ------------------------------------------------------------------- ortho
 def ortho_grid(area, res, px=2000):
     """Square cells of `px` pixels that touch the area."""
@@ -697,10 +782,12 @@ def cmd_far(cfg):
 # --------------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("step", choices=["osm", "mnt", "ortho", "lidar", "far", "mnh", "buildings", "streetview", "all"])
+    ap.add_argument("step", choices=["osm", "mnt", "ortho", "lidar", "far", "mnh", "buildings", "streetview", "roadside", "all"])
     ap.add_argument("-c", "--config", default="config.yaml")
     ap.add_argument("--remote", action="store_true",
                     help="lidar: partial remote COPC reads instead of downloading whole tiles")
+    ap.add_argument("--whole-tiles", action="store_true",
+                    help="roadside: download whole LiDAR tiles instead of remote COPC reads")
     a = ap.parse_args()
     cfg = load_cfg(a.config)
     if a.step in ("osm", "all"):
@@ -719,6 +806,8 @@ def main():
         cmd_buildings(cfg)
     if a.step == "streetview":
         cmd_streetview(cfg)
+    if a.step == "roadside":
+        cmd_roadside(cfg, remote=not a.whole_tiles)
 
 
 if __name__ == "__main__":

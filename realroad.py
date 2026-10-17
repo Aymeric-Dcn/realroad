@@ -23,6 +23,7 @@ STEPS = [
     ("mnh", ["fetch.py", "mnh"], "canopy height for the trees (optional)"),
     ("buildings", ["fetch.py", "buildings"], "BD TOPO buildings (optional)"),
     ("streetview", ["fetch.py", "streetview"], "Panoramax street-level photos (optional)"),
+    ("roadside", ["fetch.py", "roadside"], "guard rails, walls, signs: OSM + LiDAR (optional)"),
     ("road_profile", ["road_profile.py"], "elevation, crossfall, bridges"),
     ("road_edges", ["road_edges.py"], "real carriageway edges"),
     ("road_markings", ["road_markings.py"], "real centre and edge lines"),
@@ -32,7 +33,7 @@ STEPS = [
     ("streetview_sheet", ["streetview_sheet.py"], "street-level comparison sheet (optional)"),
 ]
 
-OPTIONAL = {"far", "mnh", "buildings", "streetview", "trees", "streetview_sheet"}
+OPTIONAL = {"far", "mnh", "buildings", "streetview", "roadside", "trees", "streetview_sheet"}
 
 
 def main():
