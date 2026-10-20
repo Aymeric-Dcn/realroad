@@ -5,11 +5,10 @@ name: gourdon-caussols
 # don't need to be precise: click on the road in Google Maps / Géoportail to
 # refine them if needed.
 start: {lat: 43.72130, lon: 6.97700}   # Gourdon: roundabout of the D3 / D12, by the car park
-end:   {lat: 43.73600, lon: 6.90698}   # Caussols village
+end:   {lat: 43.74209, lon: 6.90447}   # Caussols: on the D12, just before the lane into the village
 
 # No road number: the route is the shortest drive between the two points,
-# preferring the bigger roads (the D12 up to the plateau, then the lane into
-# the village). Set osm_ref_regex (e.g. "^D ?12$") to stick to one numbered road.
+# preferring the bigger roads (here the D12 all the way). Set osm_ref_regex (e.g. "^D ?12$") to stick to one numbered road.
 
 # Half-width of the corridor around the road axis where LiDAR is kept (m).
 # Wide on purpose: shoulders, ditches and banks are useful for the track.
