@@ -760,18 +760,45 @@ def cmd_ortho(cfg, px=2000):
         jpg = out / f"{name}.jpg"
         if jpg.exists():
             continue
-        r = http_get(WMS, params={
-            "SERVICE": "WMS", "VERSION": "1.3.0", "REQUEST": "GetMap",
-            "LAYERS": cfg["ortho_layer"], "STYLES": "", "CRS": "EPSG:2154",
-            "BBOX": ",".join(f"{v:.2f}" for v in c), "WIDTH": px, "HEIGHT": px,
-            "FORMAT": "image/jpeg",
-        })
-        if not r.headers.get("Content-Type", "").startswith("image"):
-            raise RuntimeError(f"Unexpected WMS response: {r.text[:300]}")
-        jpg.write_bytes(r.content)
+        jpg.write_bytes(ortho_image(cfg, c, px))
         (out / f"{name}.jgw").write_text(world_file(c, px))
         (out / f"{name}.prj").write_text(prj)
         print(f"  [{i}/{len(cells)}] {name}")
+
+
+# IGN renames / withdraws orthophoto layers now and then (HR.ORTHOIMAGERY.
+# ORTHOPHOTOS answered "unknown layer" on 2026-10-20 while still listed):
+# the first layer that answers is kept for the rest of the run.
+ORTHO_LAYERS = ["HR.ORTHOIMAGERY.ORTHOPHOTOS", "ORTHOIMAGERY.ORTHOPHOTOS", "ORTHOIMAGERY.ORTHOPHOTOS.BDORTHO"]
+_ortho_ok = {}
+
+
+def ortho_image(cfg, bbox, px):
+    """JPEG bytes of the orthophoto over bbox (Lambert-93), px x px."""
+    layers = [cfg.get("ortho_layer")] + [l for l in ORTHO_LAYERS if l != cfg.get("ortho_layer")]
+    if "layer" in _ortho_ok:
+        layers = [_ortho_ok["layer"]] + [l for l in layers if l != _ortho_ok["layer"]]
+    last = ""
+    for layer in [l for l in layers if l]:
+        try:
+            r = http_get(WMS, params={
+                "SERVICE": "WMS", "VERSION": "1.3.0", "REQUEST": "GetMap",
+                "LAYERS": layer, "STYLES": "", "CRS": "EPSG:2154",
+                "BBOX": ",".join(f"{v:.2f}" for v in bbox), "WIDTH": px, "HEIGHT": px,
+                "FORMAT": "image/jpeg",
+            })
+        except RuntimeError as e:
+            last = str(e)
+            continue
+        if not r.headers.get("Content-Type", "").startswith("image"):
+            last = r.text[:300]
+            continue
+        if _ortho_ok.get("layer") != layer:
+            if "layer" in _ortho_ok or layer != layers[0]:
+                print(f"  (orthophoto layer: {layer})")
+            _ortho_ok["layer"] = layer
+        return r.content
+    raise RuntimeError(f"No orthophoto layer answered: {last[:400]}")
 
 
 # ---------------------------------------------------------------- horizon
@@ -825,15 +852,7 @@ def cmd_far(cfg):
         jpg = out / f"{name}.jpg"
         if jpg.exists():
             continue
-        r = http_get(WMS, params={
-            "SERVICE": "WMS", "VERSION": "1.3.0", "REQUEST": "GetMap",
-            "LAYERS": cfg["ortho_layer"], "STYLES": "", "CRS": "EPSG:2154",
-            "BBOX": ",".join(f"{v:.2f}" for v in c), "WIDTH": 1000, "HEIGHT": 1000,
-            "FORMAT": "image/jpeg",
-        })
-        if not r.headers.get("Content-Type", "").startswith("image"):
-            raise RuntimeError(f"Unexpected WMS response: {r.text[:300]}")
-        jpg.write_bytes(r.content)
+        jpg.write_bytes(ortho_image(cfg, c, 1000))
         (out / f"{name}.jgw").write_text(world_file(c, 1000))
         print(f"  [{i}/{len(cells)}] {name}")
 
