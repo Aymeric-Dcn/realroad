@@ -133,21 +133,26 @@ def corridor_area(cfg, route):
 def route_from_lines(lines, start_xy, end_xy, label="the segments", gap_m=60):
     """Shortest path over a set of polylines (Lambert-93) between the vertices
     closest to the start and end points. Polylines are joined wherever their
-    vertices coincide (to within 10 cm)."""
+    vertices coincide (to within 10 cm). A line may come as (coords, cost
+    factor): the path then prefers the bigger roads (any road network, no
+    road number needed)."""
     if not lines:
         raise RuntimeError(f"No road segment found in {label}: check osm_ref_regex and the start/end points.")
     key = lambda c: (round(c[0], 1), round(c[1], 1))
     G = nx.Graph()
-    for coords in lines:
+    weighted = any(isinstance(ln, tuple) for ln in lines)
+    for ln in lines:
+        coords, factor = ln if isinstance(ln, tuple) else (ln, 1.0)
         ks = [key(c) for c in coords]
         for a, b in zip(ks, ks[1:]):
             if a != b:
-                G.add_edge(a, b, length=math.dist(a, b))
+                G.add_edge(a, b, length=math.dist(a, b) * factor)
 
     # Roundabouts and junctions often lack the road number: stitch together
-    # pieces whose end vertices are less than gap_m apart.
+    # pieces whose end vertices are less than gap_m apart (numbered road only:
+    # on a full network it would invent shortcuts).
     comps = list(nx.connected_components(G))
-    if len(comps) > 1:
+    if len(comps) > 1 and not weighted:
         ends = [[n for n in c if G.degree(n) == 1] or list(c) for c in comps]
         bridges = []
         for i in range(len(comps)):
@@ -198,19 +203,40 @@ def overpass(query, rounds=2):
     raise RuntimeError(f"Overpass unavailable ({last})")
 
 
+# Without a road number, the route is the cheapest path over all the roads a
+# car can use: length × this factor (numbered roads × 0.8 on top).
+OSM_ROAD_COST = {"motorway": 1.0, "trunk": 1.0, "primary": 1.0, "secondary": 1.0, "tertiary": 1.1,
+                 "unclassified": 1.4, "residential": 1.6, "living_street": 2.5, "service": 4.0}
+
+
 def lines_from_osm(cfg, start_ll, end_ll):
     lats, lons = [start_ll[1], end_ll[1]], [start_ll[0], end_ll[0]]
     m = 0.02  # ~2 km margin
     bbox = f"{min(lats) - m:.5f},{min(lons) - m:.5f},{max(lats) + m:.5f},{max(lons) + m:.5f}"
+    rx = cfg.get("osm_ref_regex")
+    sel = (f'way["highway"]["ref"~"{rx}"]({bbox});' if rx else
+           f'way["highway"~"^({"|".join(OSM_ROAD_COST)})(_link)?$"]({bbox});')
     q = f"""[out:json][timeout:90];
-way["highway"]["ref"~"{cfg['osm_ref_regex']}"]({bbox});
+{sel}
 (._;>;); out body;"""
     osm = overpass(q)
     (cfg["_dir"] / "route_osm_raw.json").write_text(json.dumps(osm), encoding="utf-8")
     nodes = {e["id"]: TO_L93.transform(e["lon"], e["lat"])
              for e in osm["elements"] if e["type"] == "node"}
-    return [[nodes[n] for n in w["nodes"] if n in nodes]
-            for w in osm["elements"] if w["type"] == "way"]
+    out = []
+    for w in osm["elements"]:
+        if w["type"] != "way":
+            continue
+        coords = [nodes[n] for n in w["nodes"] if n in nodes]
+        if rx:
+            out.append(coords)
+        else:
+            t = w.get("tags") or {}
+            hw = t.get("highway", "").replace("_link", "")
+            if t.get("access") in ("no", "private") or t.get("motor_vehicle") == "no":
+                continue
+            out.append((coords, OSM_ROAD_COST.get(hw, 3.0) * (0.8 if t.get("ref") else 1.0)))
+    return out
 
 
 def lines_from_ign(cfg, start_ll, end_ll):
@@ -218,7 +244,7 @@ def lines_from_ign(cfg, start_ll, end_ll):
     `cpx_numero`) matching osm_ref_regex. Same open licence as the LiDAR."""
     import re
 
-    rx = re.compile(cfg["osm_ref_regex"])
+    rx = re.compile(cfg["osm_ref_regex"]) if cfg.get("osm_ref_regex") else None
     a, b = TO_L93.transform(*start_ll), TO_L93.transform(*end_ll)
     area = box(min(a[0], b[0]), min(a[1], b[1]), max(a[0], b[0]), max(a[1], b[1])).buffer(2000)
     feats = wfs_features(cfg.get("ign_road_layer", "BDTOPO_V3:troncon_de_route"), area)
@@ -226,12 +252,26 @@ def lines_from_ign(cfg, start_ll, end_ll):
     lines = []
     for f in feats:
         props = f.get("properties") or {}
-        if not any(isinstance(v, str) and rx.match(v.strip()) for v in props.values()):
-            continue
+        factor = 1.0
+        if rx is not None:
+            if not any(isinstance(v, str) and rx.match(v.strip()) for v in props.values()):
+                continue
+        else:   # any road a car can use; importance 1 (main) … 6 (minor)
+            if props.get("nature") in ("Chemin", "Sentier", "Escalier", "Piste cyclable") or \
+                    props.get("acces_vehicule_leger") in ("Physiquement impossible", "Restreint aux ayants droit"):
+                continue
+            try:
+                factor = 1.0 + 0.15 * (int(props.get("importance") or 5) - 1)
+            except ValueError:
+                factor = 1.6
+            factor *= 0.8 if props.get("cpx_numero") else 1.0
         g = _to_l93_if_needed(shape(f["geometry"]))
         parts = g.geoms if g.geom_type == "MultiLineString" else [g]
-        lines += [[(c[0], c[1]) for c in p.coords] for p in parts]
-    print(f"  {len(feats)} BD TOPO segments in the area, {len(lines)} carry the road number.")
+        for p in parts:
+            coords = [(c[0], c[1]) for c in p.coords]
+            lines.append(coords if rx is not None else (coords, factor))
+    print(f"  {len(feats)} BD TOPO segments in the area, {len(lines)} used"
+          f"{' (carrying the road number)' if rx is not None else ''}.")
     return lines
 
 
@@ -611,7 +651,7 @@ node["highway"~"^(stop|give_way)$"]({bbox})->.sg;
   way["man_made"~"^(embankment|retaining_wall)$"]({bbox});
   node["power"~"^(pole|tower)$"]({bbox});
   node["man_made"="utility_pole"]({bbox});
-  way["highway"]["ref"~"{cfg['osm_ref_regex']}"]["maxspeed"]({bbox});
+  {f'way["highway"]["ref"~"{cfg["osm_ref_regex"]}"]["maxspeed"]({bbox});' if cfg.get("osm_ref_regex") else f'way["highway"]["maxspeed"]({bbox});'}
   node["place"~"^(village|town|hamlet)$"]({bbox});
 );
 (._;>;); out body;"""

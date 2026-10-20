@@ -282,14 +282,14 @@ def road_widths(s, x, y, cfg, p):
     from fetch import _to_l93_if_needed
     from shapely.geometry import shape
 
-    rx = re.compile(cfg["osm_ref_regex"])
+    rx = re.compile(cfg["osm_ref_regex"]) if cfg.get("osm_ref_regex") else None
     pts, wid = [], []
     for f in feats:
         props = f.get("properties") or {}
         w = props.get(p["width_field"])
         if not isinstance(w, (int, float)) or w <= 0:
             continue
-        if not any(isinstance(v, str) and rx.match(v.strip()) for v in props.values()):
+        if rx is not None and not any(isinstance(v, str) and rx.match(v.strip()) for v in props.values()):
             continue
         g = _to_l93_if_needed(shape(f["geometry"]))
         for part in (g.geoms if g.geom_type == "MultiLineString" else [g]):
@@ -300,7 +300,8 @@ def road_widths(s, x, y, cfg, p):
                 wid.append(float(w))
     w = np.full(len(s), np.nan)
     if pts:
-        dist, k = cKDTree(np.array(pts)).query(np.column_stack([x, y]), distance_upper_bound=20)
+        dist, k = cKDTree(np.array(pts)).query(np.column_stack([x, y]),
+                                               distance_upper_bound=20 if rx is not None else 8)
         ok = np.isfinite(dist)
         w[ok] = np.array(wid)[k[ok]]
     known = np.isfinite(w).mean()
@@ -960,7 +961,13 @@ def main():
     axis_tree = cKDTree(np.column_stack([x, y]))
     from trees3d import KIND_SPECIES, MODEL_CROWN_R, MODEL_HEIGHT, SPECIES
 
+    # the tree models are the same for every road: use this road's, or those
+    # already converted for another road of the data folder
     csp_dir = d / "csp_trees"
+    for cand in [csp_dir] + sorted(d.parent.glob("*/csp_trees")):
+        if all((cand / f"{sp}.bin").exists() for sp in SPECIES):
+            csp_dir = cand
+            break
     csp_bins = [csp_dir / f"{sp}.bin" for sp in SPECIES]
     use_csp = p["csp_trees"] is True or (p["csp_trees"] == "auto" and all(b.exists() for b in csp_bins))
     if use_csp and not all(b.exists() for b in csp_bins):
