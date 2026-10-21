@@ -350,6 +350,14 @@ def road_extent(s, x, y, cfg, p):
         raise SystemExit("road_edges.csv is out of date: run `python road_edges.py` again.")
     step = float(np.median(np.diff(s)))
     measured = gaussian_filter1d(e["measured"].astype(float), 15 / step, mode="nearest") > 0.5
+    # BD TOPO single-lane widths (3 m) are often wrong on two-lane roads (D45 to
+    # Dabo): there the edges of road_edges.csv (LiDAR steps around the marking)
+    # are better than the BD TOPO width even where the edge lines were not seen
+    single = gaussian_filter1d((w_bd < 4.5).astype(float), 15 / step, mode="nearest") > 0.5
+    if (single & ~measured).any():
+        print(f"  BD TOPO single-lane width on {(single & ~measured).sum() * step:.0f} m without edge lines: "
+              f"LiDAR edges used there")
+    measured |= single
     centre = np.where(measured, e["centre_offset_m"], np.nan)
     ok = np.isfinite(centre)
     centre = np.interp(s, s[ok], centre[ok]) if ok.sum() > 1 else np.zeros(len(s))
