@@ -2,3 +2,4 @@ data/
 .venv/
 __pycache__/
 *.part
+mapillary_token.txt
