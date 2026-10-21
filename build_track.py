@@ -61,6 +61,9 @@ DEFAULTS = {
     "terrain_grid_m": 2.5,
     "far_terrain_m": 290.0,      # coarse terrain ring out to this distance (0 = off); data reach ~300 m
     "far_terrain_grid_m": 10.0,
+    "mid_m": 2000.0,             # middle distance (fetch.py far): 1 m/px photos, 5 m terrain + forest canopy
+    "mid_grid_m": 15.0,
+    "canopy_from_m": 150.0,      # forest canopy on the far terrain from here (the trees stop at ~140 m)
     "backdrop_grid_m": 50.0,     # distant relief (fetch.py far), visual only
     "trees": True,               # billboards from trees.csv (trees.py) when present
     "buildings": True,           # from buildings_l93.geojson (fetch.py buildings) when present
@@ -577,7 +580,92 @@ def build_terrain(st_x, st_y, frame, dtm, ortho_tiles, p):
     return meshes
 
 
-def build_far_terrain(st_x, st_y, dtm, ortho_tiles, p):
+class Canopy:
+    """Canopy height (LiDAR HD MNH, 5 m, fetch.py far) smoothed and capped, to
+    give the distant forests their volume."""
+
+    def __init__(self, path):
+        from scipy.ndimage import gaussian_filter
+        import rasterio
+
+        with rasterio.open(path) as d:
+            a = d.read(1).astype(np.float32)
+            self.tr = d.transform
+        a = np.where(np.isfinite(a), np.clip(a, 0, 40), 0)
+        a = np.where(a < 2.5, 0, a)                           # hedges, crops: flat
+        self.a = gaussian_filter(a, 1.2) * 0.9
+
+    def sample(self, x, y):
+        col = ((x - self.tr.c) / self.tr.a - 0.5).astype(int)
+        row = ((y - self.tr.f) / self.tr.e - 0.5).astype(int)
+        ok = (col >= 0) & (row >= 0) & (col < self.a.shape[1]) & (row < self.a.shape[0])
+        out = np.zeros(len(x), np.float32)
+        out[ok] = self.a[row[ok], col[ok]]
+        return out
+
+
+def build_mid_terrain(st_x, st_y, d, p, canopy):
+    """Middle distance, from the far terrain ring out to mid_m (fetch.py far):
+    LiDAR HD terrain at 5 m plus the forest canopy, 1 m/px orthophotos,
+    15 m grid. Lowered near its inner edge so the finer rings win. Visual only."""
+    folder = d / "backdrop"
+    dem_f = folder / "mid_mnt.tif"
+    if not p["mid_m"] or not dem_f.exists():
+        return []
+    tiles = ortho_tile_list(folder, "mid_*.jpg")
+    dem = FastDTM([dem_f])
+    tree = cKDTree(np.column_stack([st_x, st_y]))
+    g = p["mid_grid_m"]
+    start = max(p["far_terrain_m"] or 0, p["terrain_half_width_m"])
+    meshes = []
+    for tile in tiles:
+        minx, miny, maxx, maxy = tile["bounds"]
+        xs = np.arange(minx, maxx + g / 2, g)
+        ys = np.arange(miny, maxy + g / 2, g)
+        GX, GY = np.meshgrid(xs, ys[::-1])
+        gx, gy = GX.ravel(), GY.ravel()
+        dist, _ = tree.query(np.column_stack([gx, gy]))
+        keep = (dist >= start - 1.5 * g) & (dist <= p["mid_m"] + 1.5 * g)
+        if not keep.any():
+            continue
+        z = np.full(len(gx), np.nan)
+        z[keep] = dem.sample(gx[keep], gy[keep]) - np.where(dist[keep] < start + 2 * g, 1.0, 0.0)
+        if canopy is not None:
+            z[keep] += canopy.sample(gx[keep], gy[keep])
+        keep &= np.isfinite(z)
+        faces = grid_faces(*GX.shape)
+        faces = faces[keep[faces].all(axis=1)]
+        if len(faces) == 0:
+            continue
+        used = np.unique(faces)
+        remap = -np.ones(len(gx), np.int64)
+        remap[used] = np.arange(len(used))
+        verts = np.column_stack([gx[used], gy[used], z[used]])
+        uvs = np.column_stack([(gx[used] - minx) / (maxx - minx), (gy[used] - miny) / (maxy - miny)])
+        meshes.append((tile, verts, remap[faces].astype(np.int32), uvs))
+    return meshes
+
+
+def colour_match(ref_tiles, src_tiles, pts, clip=(0.7, 1.4)):
+    """Per-channel gain / offset bringing src photos (another flight, another
+    resolution) to the colours of ref ones on shared points: no visible jump
+    where the rings meet."""
+    from roadside import OrthoSampler
+
+    if not ref_tiles or not src_tiles or not len(pts):
+        return None
+    a = OrthoSampler(ref_tiles).colours(pts[:, 0], pts[:, 1])
+    b_ = OrthoSampler(src_tiles).colours(pts[:, 0], pts[:, 1])
+    ok = (a.sum(1) != 270) & (b_.sum(1) != 270)            # 90,90,90 = no tile there
+    if ok.sum() < 200:
+        return None
+    a, b_ = a[ok], b_[ok]
+    gain = np.clip(a.std(0) / np.maximum(b_.std(0), 1e-3), *clip)
+    off = a.mean(0) - gain * b_.mean(0)
+    return {"gain": [round(float(v), 3) for v in gain], "off": [round(float(v), 1) for v in off]}
+
+
+def build_far_terrain(st_x, st_y, dtm, ortho_tiles, p, canopy=None):
     """Coarse ring from just inside the detailed terrain out to far_terrain_m,
     0.3 m lower so the detailed mesh always wins where they overlap. Distances
     are to the nearest road point anywhere, so it never covers another part
@@ -600,6 +688,10 @@ def build_far_terrain(st_x, st_y, dtm, ortho_tiles, p):
             continue
         z = np.full(len(gx), np.nan)
         z[ring] = dtm.sample(gx[ring], gy[ring]) - 0.3
+        if canopy is not None:
+            # forests stand out of the ground where the 3D / billboard trees stop
+            w_ = np.clip((dist[ring] - p["canopy_from_m"]) / 80.0, 0, 1)
+            z[ring] += w_ * w_ * (3 - 2 * w_) * np.nan_to_num(canopy.sample(gx[ring], gy[ring]))
         keep = ring & np.isfinite(z)
         faces = grid_faces(*GX.shape)
         faces = faces[keep[faces].all(axis=1)]
@@ -628,6 +720,8 @@ def build_backdrop(st_x, st_y, d, p):
     tree = cKDTree(np.column_stack([st_x, st_y]))
     g = p["backdrop_grid_m"]
     start = max(p["far_terrain_m"] or 0, p["terrain_half_width_m"])
+    if p["mid_m"] and (folder / "mid_mnt.tif").exists():
+        start = p["mid_m"]
     meshes = []
     for tile in tiles:
         minx, miny, maxx, maxy = tile["bounds"]
@@ -766,16 +860,22 @@ def ortho_grade_params(ortho, x, y, p, n_tiles=12):
     return None if gain > 0.985 else {"gain": round(gain, 3), "sat": 1.2}
 
 
-def grade_copy(src, dst, g):
-    """Copy an orthophoto tile, graded (ortho_grade_params) when g is set."""
+def grade_copy(src, dst, g, match=None):
+    """Copy an orthophoto tile, colour-matched (colour_match) and graded
+    (ortho_grade_params) when given."""
     if Path(dst).exists():
         return
-    if not g:
+    if not g and not match:
         shutil.copy(src, dst)
         return
     from PIL import Image
 
     a = np.asarray(Image.open(src).convert("RGB"), np.float32) / 255
+    if match:
+        a = np.clip((a * 255 * np.array(match["gain"]) + np.array(match["off"])) / 255, 0, 1)
+    if not g:
+        Image.fromarray((a * 255).astype(np.uint8)).save(dst, quality=92)
+        return
     lum = (a @ np.array([0.3, 0.59, 0.11], np.float32))[..., None]
     w = np.clip((a[..., 1:2] - np.maximum(a[..., :1], a[..., 2:])) / np.maximum(lum, 1e-3) / 0.08, 0, 1)
     c = lum + (a - lum) * (1 + (g["sat"] - 1) * w)
@@ -959,8 +1059,29 @@ def main():
         sw_plan = village.plan_sidewalks(sw_road, d / "buildings_l93.geojson", d / "route_ign_raw.json", sw_q)
     print("Terrain…")
     terr = build_terrain(x, y, frame, dtm, ortho, p)
-    far = build_far_terrain(x, y, dtm, ortho, p)
+    canopy = Canopy(d / "backdrop" / "mid_mnh.tif") if (d / "backdrop" / "mid_mnh.tif").exists() else None
+    far = build_far_terrain(x, y, dtm, ortho, p, canopy)
+    mid_meshes = build_mid_terrain(x, y, d, p, canopy)
     backdrop = build_backdrop(x, y, d, p)
+    # colours of the distant photos matched to the near ones, ring by ring
+    rng_m = np.random.default_rng(3)
+    k_ = rng_m.integers(0, len(x), 3000)
+    off_ = rng_m.uniform(-280, 280, (3000, 2))
+    pts_near = np.column_stack([x[k_], y[k_]]) + off_
+    mid_tiles = ortho_tile_list(d / "backdrop", "mid_*.jpg")
+    mid_match = colour_match(ortho, mid_tiles, pts_near) if mid_meshes else None
+    bd_tiles = ortho_tile_list(d / "backdrop", "backdrop_*.jpg")
+    k2 = rng_m.integers(0, len(x), 3000)
+    a2 = rng_m.uniform(0, 2 * np.pi, 3000)
+    r2 = rng_m.uniform(0.5, 1.0, 3000) * (p["mid_m"] if mid_meshes else 1500)
+    pts_mid = np.column_stack([x[k2] + r2 * np.cos(a2), y[k2] + r2 * np.sin(a2)])
+    bd_match = colour_match(mid_tiles if mid_meshes else ortho, bd_tiles, pts_mid) if backdrop else None
+    if mid_match and mid_tiles and mid_meshes:
+        # chain: backdrop → mid's raw colours → near colours
+        g1, o1 = np.array(mid_match["gain"]), np.array(mid_match["off"])
+        if bd_match:
+            g0, o0 = np.array(bd_match["gain"]), np.array(bd_match["off"])
+            bd_match = {"gain": list(g1 * g0), "off": list(g1 * o0 + o1)}
 
     # local origin (kept in the manifest to go back to Lambert-93)
     x0 = round(float(np.mean(x)), -1)
@@ -1153,10 +1274,19 @@ def main():
             materials[mname] = tile["file"].name
             grade_copy(tile["file"], tex / tile["file"].name, grade)
         add(phys_name("GRASS", f"far_{mname[6:]}"), mname, verts, faces, uvs, "GRASS")
+    for tile, verts, faces, uvs in mid_meshes:
+        mname = f"mid_{int(tile['bounds'][0])}_{int(tile['bounds'][1])}"
+        materials[mname] = tile["file"].name
+        grade_copy(tile["file"], tex / tile["file"].name, grade, mid_match)
+        add(mname, mname, verts, faces, uvs)                              # visual only
+    if mid_meshes:
+        print(f"  middle distance: {len(mid_meshes)} tiles to {p['mid_m'] / 1000:.1f} km (1 m/px, terrain 5 m"
+              f"{' + forest canopy' if canopy is not None else ''}), {sum(len(m_[1]) for m_ in mid_meshes):,} vertices"
+              + (f", colours matched (gain {mid_match['gain']})" if mid_match else ""))
     for tile, verts, faces, uvs in backdrop:
         mname = f"backdrop_{int(tile['bounds'][0])}_{int(tile['bounds'][1])}"
         materials[mname] = tile["file"].name
-        grade_copy(tile["file"], tex / tile["file"].name, grade)
+        grade_copy(tile["file"], tex / tile["file"].name, grade, bd_match)
         add(mname, mname, verts, faces, uvs)                              # visual only
     if backdrop:
         print(f"  distant relief: {len(backdrop)} tiles, {sum(len(b[1]) for b in backdrop):,} vertices")
@@ -1306,7 +1436,7 @@ def main():
         if surface:
             name = phys_name(surface, name)
         add(name, mat, sv, sf, suv, surface, keep_winding=keep, **opt)
-    far_only = sorted(m_ for m_ in set(materials) - near_mats if m_.startswith(("ortho_", "backdrop_")))
+    far_only = sorted(m_ for m_ in set(materials) - near_mats if m_.startswith(("ortho_", "backdrop_", "mid_")))
 
     asphalt_texture(tex / "asphalt.png", float(np.median(widths)), p["texture_repeat_m"],
                     paint_lines=painted is None and p["markings"] != "none")

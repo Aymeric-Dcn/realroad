@@ -344,15 +344,19 @@ def build_sidewalks(road, plan, q, acc):
 
 
 def sidewalk_textures(assets, tex):
-    """Pavement (concrete / fine asphalt) and kerb (concrete) textures."""
-    pav = _photo(assets, "Concrete034", (512, 512))
+    """Pavement: fine grey asphalt (most village pavements in France), smooth
+    and even, so it does not read as ground; kerb: light concrete."""
+    pav = _photo(assets, "Asphalt031", (512, 512))
+    rng = np.random.default_rng(5)
     if pav is None:
-        rng = np.random.default_rng(5)
-        pav = np.clip(0.62 * _render(rng, (512, 512)), 0, 1).repeat(3, 2)
+        pav = np.clip(0.42 * _render(rng, (512, 512)), 0, 1).repeat(3, 2)
     else:
-        pav = np.clip(pav * (0.6 / max(float(pav.mean()), 1e-3)), 0, 1)
-    Image.fromarray((pav * 255).astype(np.uint8)).save(tex / "sidewalk.png")
-    kerb = np.clip(pav * 1.15, 0, 1)
+        lum = pav.mean(2, keepdims=True)
+        pav = np.clip(0.42 + 0.5 * (lum - lum.mean()), 0, 1).repeat(3, 2) * np.array([1.0, 1.0, 1.02])
+    Image.fromarray((np.clip(pav, 0, 1) * 255).astype(np.uint8)).save(tex / "sidewalk.png")
+    kerb = _photo(assets, "Concrete034", (256, 256))
+    kerb = np.clip(kerb * (0.68 / max(float(kerb.mean()), 1e-3)), 0, 1) if kerb is not None else \
+        np.clip(0.68 * _render(rng, (256, 256)), 0, 1).repeat(3, 2)
     Image.fromarray((kerb * 255).astype(np.uint8)).save(tex / "kerb.png")
     return {"sidewalk": {"texture": "sidewalk.png", "kind": "facade"},
             "kerb": {"texture": "kerb.png", "kind": "facade"}}

@@ -16,6 +16,7 @@ Pipeline stage 1: fetch the open data for one road section.
 All geometries are in Lambert-93 (EPSG:2154), in metres.
 """
 import argparse
+import io
 import json
 import math
 import re
@@ -859,6 +860,7 @@ def cmd_far(cfg):
         else:
             raise SystemExit("No elevation layer answered for the distant relief:\n  " + "\n  ".join(errors)
                              + "\nSet backdrop_dem_layer in config.yaml (see the WMS-R GetCapabilities).")
+    cmd_mid(cfg, route)
     print(f"{len(cells)} distant orthophoto tiles (4 km, 4 m/px).")
     for i, c in enumerate(cells, 1):
         name = f"backdrop_{int(c[0])}_{int(c[1])}"
@@ -868,6 +870,74 @@ def cmd_far(cfg):
         jpg.write_bytes(ortho_image(cfg, c, 1000))
         (out / f"{name}.jgw").write_text(world_file(c, 1000))
         print(f"  [{i}/{len(cells)}] {name}")
+
+
+LIDAR_WMS = {"mnt": "IGNF_LIDAR-HD_MNT_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93",
+             "mnh": "IGNF_LIDAR-HD_MNH_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93"}
+
+
+def wms_geotiff(layer, bbox, res, dest, max_px=5000):
+    """One GeoTIFF of a WMS-R elevation layer over bbox at res metres (split
+    in blocks under the server's size limit, stitched), with a world file."""
+    minx, miny, maxx, maxy = bbox
+    W, H = int(round((maxx - minx) / res)), int(round((maxy - miny) / res))
+    out = np.full((H, W), np.nan, np.float32)
+    import rasterio
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    for by in range(0, H, max_px):
+        for bx in range(0, W, max_px):
+            w, h = min(max_px, W - bx), min(max_px, H - by)
+            bb = (minx + bx * res, maxy - (by + h) * res, minx + (bx + w) * res, maxy - by * res)
+            r = http_get(WMS, params={
+                "SERVICE": "WMS", "VERSION": "1.3.0", "REQUEST": "GetMap", "LAYERS": layer, "STYLES": "",
+                "CRS": "EPSG:2154", "BBOX": ",".join(f"{v:.2f}" for v in bb), "WIDTH": w, "HEIGHT": h,
+                "FORMAT": "image/geotiff"}, retries=3)
+            if not _is_tiff(r.content):
+                raise RuntimeError(f"{layer}: not a GeoTIFF ({r.headers.get('Content-Type')})")
+            with MemoryFile(r.content) as mf, mf.open() as ds:
+                a = ds.read(1).astype(np.float32)
+            out[by:by + h, bx:bx + w] = np.where(a < -1000, np.nan, a)[:h, :w]
+    part = dest.with_name(dest.stem + "_part.tif")
+    with rasterio.open(part, "w", driver="GTiff", width=W, height=H, count=1, dtype="float32",
+                       crs="EPSG:2154", transform=from_origin(minx, maxy, res, res), nodata=np.nan,
+                       compress="deflate") as ds:
+        ds.write(out, 1)
+    part.replace(dest)
+
+
+def cmd_mid(cfg, route=None):
+    """Middle distance (to mid_m, 2 km): 1 m/px orthophoto tiles (1 km), the
+    LiDAR HD terrain and canopy height at 5 m. build_track makes the forests
+    stand out of the hills there (terrain + canopy), where the 3D trees stop."""
+    route = route or load_route(cfg)
+    mid_m = cfg.get("mid_m", 2000)
+    if not mid_m:
+        return
+    out = cfg["_dir"] / "backdrop"
+    out.mkdir(exist_ok=True)
+    area = route.buffer(mid_m)
+    minx, miny, maxx, maxy = (round(v / 100) * 100 for v in area.bounds)
+    for key, layer in LIDAR_WMS.items():
+        dest = out / f"mid_{key}.tif"
+        if not dest.exists():
+            try:
+                wms_geotiff(layer, (minx, miny, maxx, maxy), cfg.get("mid_dem_res_m", 5.0), dest)
+                print(f"Middle-distance {key.upper()}: 5 m over {(maxx - minx) / 1000:.1f} x {(maxy - miny) / 1000:.1f} km.")
+            except (RuntimeError, ValueError) as e:
+                print(f"  ! middle-distance {key.upper()}: {str(e)[:300]}")
+    cells = ortho_grid(area, 1.0, 1000)
+    print(f"{len(cells)} middle-distance orthophoto tiles (1 km, 1 m/px).")
+    for i, c in enumerate(cells, 1):
+        name = f"mid_{int(c[0])}_{int(c[1])}"
+        jpg = out / f"{name}.jpg"
+        if jpg.exists():
+            continue
+        jpg.write_bytes(ortho_image(cfg, c, 1000))
+        (out / f"{name}.jgw").write_text(world_file(c, 1000))
+        if i % 20 == 0 or i == len(cells):
+            print(f"  [{i}/{len(cells)}] {name}")
 
 
 # --------------------------------------------------------------------- main

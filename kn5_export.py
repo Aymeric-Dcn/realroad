@@ -872,7 +872,7 @@ def main():
         w.i32(len(mat_names))
         for m in mat_names:
             spec = specs[m]
-            kind = spec.get("kind") or ("terrain" if m.startswith(("ortho_", "vortho_", "portho_", "backdrop_")) else m)
+            kind = spec.get("kind") or ("terrain" if m.startswith(("ortho_", "vortho_", "portho_", "backdrop_", "mid_")) else m)
             props = dict(mats.get(kind, mats["terrain"]))
             props.update(spec.get("props") or {})
             if spec.get("alpha") and not props.get("ksAlphaRef"):
@@ -890,7 +890,7 @@ def main():
             verts, faces, uvs = data[f"v{k}"], data[f"f{k}"], data[f"uv{k}"]
             assert len(verts) <= KN5_MAX_VERTS, o["name"]
             mt = specs[o["material"]].get("diffuse_of") or o["material"]
-            inset = tex_size[mt] if mt.startswith(("ortho_", "backdrop_", "roadside_")) else None
+            inset = tex_size[mt] if mt.startswith(("ortho_", "backdrop_", "mid_", "roadside_")) else None
             vb, centre, radius = kn5_vertices(verts, faces.astype(np.int64), uvs, inset)
             w.mesh(o["name"], vb, faces.astype("<u2"), mat_names.index(o["material"]), centre, radius,
                    lod_out=o.get("lod_out", 0.0), hidden=o.get("hidden", False), shadows=o.get("shadows", True))
