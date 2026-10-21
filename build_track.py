@@ -73,6 +73,7 @@ DEFAULTS = {
                                  # faces steeper than 62°, get the rock material
     "rock_repeat_m": 4.0,
     "terrain_mask_px": 256,      # resolution of the terrain shader masks (per 400 m orthophoto tile)
+    "sidewalks": True,           # pavements and kerbs along the houses (village.py)
     "photo_textures": True,      # CC0 photo textures (assets.py) where available, else procedural
     "grass_mask": "auto",        # CSP grass colour mask: auto (from the orthophotos) or {main, red, min_lum, max_lum}
     "csp_trees": "auto",         # CSP 3D trees (trees3d.py): auto = when data/<name>/csp_trees/*.bin exist
@@ -1081,7 +1082,7 @@ def main():
 
     # 3D scenery (visual only): trees (trees.py) and buildings (fetch.py buildings)
     from scenery import build_buildings, build_trees
-    from textures import facade_texture, foliage_atlas, tree_atlas
+    from textures import foliage_atlas, tree_atlas
 
     scen = []
     half = np.maximum(-frame["right"], frame["left"])
@@ -1170,15 +1171,27 @@ def main():
     elif p["trees"]:
         print("  (no trees.csv: run `python fetch.py mnh` then `python trees.py` for the trees)")
     if p["buildings"] and (d / "buildings_l93.geojson").exists():
-        bm, n_b, n_g = build_buildings(d / "buildings_l93.geojson", dtm, ortho, axis_tree, half, p)
+        import photo_tex
+        import village
+        from fetch import TO_WGS as _wgs
+
+        _lon, _lat = _wgs.transform(float(np.mean(x)), float(np.mean(y)))
+        climate_ = photo_tex.climate_of(_lat, _lon)
+        assets_ = photo_tex.assets_dir(d.parent) if p["photo_textures"] else None
+        fmats = village.facade_textures(assets_, climate_, tex)
+        rmats = village.roof_textures(assets_, tex) if assets_ else {}
+        bm, n_b, n_g = build_buildings(d / "buildings_l93.geojson", dtm, ortho, axis_tree, half, p,
+                                       climate=climate_, roof_mats=rmats)
+        used_ = {m_[1] for m_ in bm}
         for m_ in bm:
             if m_[1].startswith("ortho_"):
                 use_tile(next(t_ for t_ in ortho if f"ortho_{int(t_['bounds'][0])}_{int(t_['bounds'][1])}" == m_[1]))
-        if bm:
-            facade_texture(tex / "facade.png")
-            materials["facade"] = {"texture": "facade.png", "kind": "facade"}
+        materials.update({k: v for k, v in fmats.items() if k in used_})
+        materials.update({f"roof_{k}": v for k, v in rmats.items() if f"roof_{k}" in used_})
         scen += bm
-        print(f"  buildings: {n_b} ({n_g} with a gable roof)")
+        print(f"  buildings: {n_b} ({n_g} with a gable roof), {len([k for k in fmats if k in used_])} façade "
+              f"styles ({climate_})" + (", photographed walls and roof tiles" if rmats else
+                                        ", roofs from the orthophoto (run `python assets.py` for roof tiles)"))
     elif p["buildings"]:
         print("  (no buildings_l93.geojson: run `python fetch.py buildings` for the buildings)")
     if p["furniture"]:
@@ -1194,6 +1207,21 @@ def main():
                                               f"{k.replace('_', ' ')}: {v}" for k, v in fst.items())
               + ("" if (d / "roadside_points.npz").exists() else
                  "  (no LiDAR roadside points: run `python fetch.py roadside` for the guard rails and walls)"))
+    if p["sidewalks"] and (d / "buildings_l93.geojson").exists():
+        import photo_tex
+        import village
+        from furniture import Acc, Road as _Road
+
+        q_ = {**village.SIDEWALK, **{k: v for k, v in p.items() if k.startswith("sidewalk")}}
+        road_ = _Road(s, x, y, frame, dtm, p["verge_m"])
+        plan_ = village.plan_sidewalks(road_, d / "buildings_l93.geojson", d / "route_ign_raw.json", q_)
+        acc_ = Acc()
+        L_sw = village.build_sidewalks(road_, plan_, q_, acc_)
+        if L_sw:
+            scen += acc_.meshes()
+            materials.update(village.sidewalk_textures(
+                photo_tex.assets_dir(d.parent) if p["photo_textures"] else None, tex))
+            print(f"  pavements: {L_sw:,.0f} m in the villages (kerb {q_['sidewalk_kerb_m'] * 100:.0f} cm)")
     for name, mat, sv, sf, suv, keep, *opt in scen:
         opt = dict(opt[0]) if opt else {}
         surface = opt.pop("surface", None)    # "WALL": cars collide with it

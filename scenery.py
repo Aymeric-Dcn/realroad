@@ -334,12 +334,21 @@ def building_heights(props):
     return eave, float(roof)
 
 
-def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p):
-    """Walls (façade texture) and roofs (orthophoto: the real roof colours),
-    gable roofs on near-rectangular footprints, flat ones otherwise."""
+def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p, climate=None, roof_mats=None):
+    """Walls and roofs, gable roofs on near-rectangular footprints, flat ones
+    otherwise. climate: façade variants of village.py per building (else one
+    "facade" material); roof_mats: photographed tiles chosen from the roof
+    colour on the orthophoto (else the orthophoto itself on the roofs)."""
     fc = json.loads(open(geojson, encoding="utf-8").read())
-    walls = {}   # tile -> lists
-    roofs = {}
+    walls = {}   # material -> lists
+    roofs = {}   # material (+ tile for orthophoto roofs) -> lists
+    sampler = None
+    if roof_mats:
+        from roadside import OrthoSampler
+
+        sampler = OrthoSampler(tiles)
+    if climate:
+        from village import ROOF_REPEAT_M, wall_material
     n_b = n_gable = 0
     bay_u, bay_v = FACADE_BAY_M
     for f in fc.get("features", []):
@@ -371,8 +380,20 @@ def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p):
             ti = int(_tile_index(np.array([cxy[0]]), np.array([cxy[1]]), tiles)[0])
             if ti < 0:
                 continue
-            W = walls.setdefault(ti, ([], [], []))
-            R = roofs.setdefault(ti, ([], [], []))
+            wmat = wall_material(props_, climate) if climate else "facade"
+            W = walls.setdefault(wmat, ([], [], []))
+            rkind = None
+            if sampler is not None:
+                from village import roof_kind
+
+                pts_ = np.vstack([ex, cxy[None, :]])
+                pts_ = cxy + 0.6 * (pts_ - cxy)               # inside the footprint
+                rkind = roof_kind(sampler.colours(pts_[:, 0], pts_[:, 1]).mean(0) / 255.0)
+                if rkind not in roof_mats:
+                    rkind = None
+            rkey = f"roof_{rkind}" if rkind else (ti,)
+            R = roofs.setdefault(rkey, ([], [], []))
+            tb = tiles[ti]["bounds"]
             # walls
             cum = 0.0
             for i in range(len(ex)):
@@ -388,7 +409,6 @@ def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p):
             # roof
             q, rect_area = _min_rect(ex)
             rect = area / max(rect_area, 1e-6)
-            tb = tiles[ti]["bounds"]
             short = min(np.hypot(*(q[1] - q[0])), np.hypot(*(q[2] - q[1])))
             z_ridge = z_eave + min(z_ridge - z_eave, 0.42 * short)
             if z_ridge - z_eave >= 0.8 and rect >= 0.85 and len(ex) <= 12:
@@ -403,7 +423,15 @@ def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p):
                 qo = cen + (q - cen) * (1 + ov / max(np.hypot(*(q[0] - cen)), 1.0))
                 for (pa, pb, ra, rb) in ((qo[0], qo[1], m2, m1), (qo[2], qo[3], m1, m2)):
                     v = np.array([[*pa, z_eave - 0.15], [*pb, z_eave - 0.15], [*ra, z_ridge], [*rb, z_ridge]])
-                    _append(R, v, np.array([[0, 1, 3], [0, 3, 2]]), _ortho_uv(v, tb))
+                    if rkind is None:
+                        ruv = _ortho_uv(v, tb)
+                    else:   # tiles: u along the eaves, v up the slope
+                        e_ = (pb - pa) / max(np.hypot(*(pb - pa)), 1e-6)
+                        up_ = v - v[0]
+                        uu = up_[:, :2] @ e_
+                        vv = np.hypot(np.linalg.norm(up_[:, :2] - uu[:, None] * e_, axis=1), up_[:, 2])
+                        ruv = np.column_stack([uu, vv]) / ROOF_REPEAT_M
+                    _append(R, v, np.array([[0, 1, 3], [0, 3, 2]]), ruv)
                 # gable triangles (façade texture), on the rectangle's short sides
                 for (pa, pb, rm) in ((q[1], q[2], m1), (q[3], q[0], m2)):
                     v = np.array([[*pa, z_eave], [*pb, z_eave], [*rm, z_ridge]])
@@ -417,15 +445,19 @@ def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p):
                 tris = _ear_clip(ex)
                 if tris:
                     v = np.column_stack([ex, np.full(len(ex), z_eave + 0.05)])
-                    _append(R, v, np.array(tris), _ortho_uv(v, tb))
+                    ruv = _ortho_uv(v, tb) if rkind is None else v[:, :2] / ROOF_REPEAT_M
+                    _append(R, v, np.array(tris), ruv)
             n_b += 1
     out = []
-    for ti, (V, F, UV) in walls.items():
+    for wm, (V, F, UV) in walls.items():
         out += [m_ + ({"surface": "WALL"},)   # solid: cars hit the walls
-                for m_ in _chunks(f"buildings_walls_{_tile_name(tiles[ti])}", "facade", V, F, UV, keep_winding=True)]
-    for ti, (V, F, UV) in roofs.items():
-        mname = f"ortho_{_tile_name(tiles[ti])}"
-        out += _chunks(f"buildings_roofs_{_tile_name(tiles[ti])}", mname, V, F, UV, keep_winding=False)
+                for m_ in _chunks(f"buildings_walls_{wm}", wm, V, F, UV, keep_winding=True)]
+    for key, (V, F, UV) in roofs.items():
+        if isinstance(key, tuple):
+            name = _tile_name(tiles[key[0]])
+            out += _chunks(f"buildings_roofs_{name}", f"ortho_{name}", V, F, UV, keep_winding=False)
+        else:
+            out += _chunks(f"buildings_{key}", key, V, F, UV, keep_winding=False)
     return out, n_b, n_gable
 
 

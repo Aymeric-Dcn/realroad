@@ -36,6 +36,19 @@ AMBIENTCG = {
     "Ground037": ("grass_damp", "1K"),   # damp forest grass (Vosges)
     "Ground110": ("gravel", "1K"),       # dry grey-brown gravel
     "Ground078": ("forest_floor", "1K"),
+    # villages: house renders, stone, barns and sheds, roofs, pavements
+    "Plaster002": ("render_rough", "1K"),
+    "Plaster003": ("render", "1K"),
+    "PaintedPlaster017": ("render_white", "1K"),
+    "Bricks066": ("stone_wall", "1K"),
+    "Bricks099": ("sandstone_wall", "1K"),   # churches, Vosges sandstone
+    "Planks021": ("barn_wood", "1K"),
+    "CorrugatedSteel005": ("shed_metal", "1K"),
+    "RoofingTiles013A": ("roof_clay", "1K"),
+    "RoofingTiles010": ("roof_grey", "1K"),
+    "RoofingTiles009": ("roof_dark", "1K"),
+    "Concrete034": ("pavement", "1K"),
+    "PavingStones142": ("paving", "1K"),
 }
 # Poly Haven model id → texture maps to fetch (2K JPG)
 POLYHAVEN = {
