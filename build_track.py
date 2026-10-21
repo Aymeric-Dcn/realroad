@@ -83,6 +83,16 @@ DEFAULTS = {
     "parapet_drop_m": 1.0,       # terrain this much below the road edge within 2.5 m
     "parapet_min_run_m": 20.0,
     "parapet_height_m": 0.65,
+    # guard rails only where warranted (furniture.detect_parapets): bends whose
+    # outside is the valley, hairpin approaches, cliffs
+    "rail_warrant": True,
+    "rail_bend_radius_m": 70.0,
+    "rail_bend_extend_m": 20.0,
+    "rail_hairpin_radius_m": 25.0,
+    "rail_hairpin_before_m": 80.0,
+    "rail_hairpin_after_m": 30.0,
+    "rail_cliff_drop_m": 4.0,
+    "rail_join_gap_m": 30.0,
     "furniture_lidar_classes": [1, 6, 64, 67],
     "furniture_min_points": 3,   # LiDAR points per metre of road to count as a barrier
     "furniture_min_run_m": 10.0,

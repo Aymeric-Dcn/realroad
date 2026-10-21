@@ -359,12 +359,32 @@ def detect_parapets(road, built_up, taken, p, kind="wall"):
     (stone or concrete, ~0.65 m). The LiDAR HD barely sees them (a handful of
     points, not in the DTM), so they are laid out by that rule: terrain
     more than `parapet_drop_m` below the road edge within 2.5 m, over at
-    least 20 m, outside villages. Not surveyed one by one."""
+    least 20 m, outside villages. Not surveyed one by one.
+
+    Guard rails (kind "rail") are rarer on French departmental roads: only
+    where leaving the road is dangerous. On top of the drop they need a
+    warrant (`rail_warrant`): a bend whose outside is the valley side, the
+    approach to a hairpin, or a real cliff (drop of `rail_cliff_drop_m`
+    within 6 m)."""
     n = len(road.s)
     step = 2
     ks = np.arange(0, n, step)
-    offs = np.arange(0.25, 4.01, 0.25)
+    offs = np.arange(0.25, 6.01, 0.25)
     runs = []
+    rail = kind == "rail" and p.get("rail_warrant", True)
+    if rail:
+        r = road.radius[ks]
+        hairpin = np.abs(r) < p["rail_hairpin_radius_m"]
+        near_hp = np.zeros(len(ks), bool)
+        sk = road.s[ks]
+        for i in np.flatnonzero(hairpin):
+            near_hp |= (sk >= sk[i] - p["rail_hairpin_before_m"]) & (sk <= sk[i] + p["rail_hairpin_after_m"])
+        bend = np.abs(r) < p["rail_bend_radius_m"]
+        # a bend lasts a little longer than where its radius is small
+        n_ext = max(1, int(p["rail_bend_extend_m"] / (step * road.step)))
+        grow = np.ones(2 * n_ext + 1)
+        left_bend = np.convolve(bend & (r > 0), grow, mode="same") > 0
+        right_bend = np.convolve(bend & (r < 0), grow, mode="same") > 0
     for sd in (-1, 1):
         e = np.where(sd > 0, road.f["left"][ks], road.f["right"][ks])
         T = e[:, None] + sd * offs[None, :]
@@ -375,7 +395,12 @@ def detect_parapets(road, built_up, taken, p, kind="wall"):
         drop = ze[:, None] - zt
         near = drop[:, offs <= 2.5]
         steep = np.nanmax(np.nan_to_num(near, nan=0), axis=1) >= p["parapet_drop_m"]
-        steep &= np.nanmax(np.nan_to_num(drop, nan=0), axis=1) >= p["parapet_drop_m"] + 0.5
+        steep &= np.nanmax(np.nan_to_num(drop[:, offs <= 4.0], nan=0), axis=1) >= p["parapet_drop_m"] + 0.5
+        if rail:
+            # outside of the bend: turning left (r > 0) the valley is on the right
+            outside = right_bend if sd > 0 else left_bend
+            cliff = np.nanmax(np.nan_to_num(drop, nan=0), axis=1) >= p["rail_cliff_drop_m"]
+            steep &= outside | near_hp | cliff
         steep &= ~built_up[ks]
         steep &= ~taken[sd][np.clip(road.s[ks].astype(int), 0, len(taken[sd]) - 1)]
         # where the drop starts: the wall stands just before it
@@ -384,7 +409,9 @@ def detect_parapets(road, built_up, taken, p, kind="wall"):
         idx = np.flatnonzero(steep)
         if not len(idx):
             continue
-        groups = np.split(idx, np.flatnonzero(np.diff(idx) > 4) + 1)   # gaps up to ~8 m bridged
+        # gaps up to ~8 m bridged (rails: a real rail does not stop for 20 m)
+        gap = max(4, int(p.get("rail_join_gap_m", 30) / (step * road.step))) if rail else 4
+        groups = np.split(idx, np.flatnonzero(np.diff(idx) > gap) + 1)
         for g in groups:
             s0, s1 = road.s[ks[g[0]]], road.s[ks[g[-1]]]
             if s1 - s0 < p["parapet_min_run_m"]:

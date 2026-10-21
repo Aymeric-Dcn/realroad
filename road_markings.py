@@ -122,18 +122,23 @@ def rebuild(on, state, s, q):
     paint = state == 2
     half = q["dash_m"] / 2
     for a, b in runs(state == 1):
-        seen = [(s[a + i] + s[a + j - 1]) / 2 for i, j in runs(on[a:b])]
+        rr = runs(on[a:b])
+        seen = [(s[a + i] + s[a + j - 1]) / 2 for i, j in rr]
         if not seen:                       # filled stretch: nothing seen, standard spacing
             seen = [s[a] + q["dash_m"]]
         seen = np.array(seen)
-        gaps = np.diff(seen)
-        spacing = float(np.clip(np.median(gaps), 5.0, 16.0)) if len(gaps) else 13.0
+        # spacing from the real dashes (≥ 2 m), not from 1 m blips of a worn dash
+        solid = np.array([s[a + i] + s[a + j - 1] for i, j in rr if (j - i) * step >= 2.0]) / 2
+        gaps = np.diff(solid if len(solid) > 2 else seen)
+        # French centre lines: T1 3 m / 10 m, T3 3 m / 1.33 m (winding roads)
+        spacing = float(np.clip(np.median(gaps), 4.0, 16.0)) if len(gaps) else 13.0
         dashes = [seen[0]]
-        for g, x in zip(gaps, seen[1:]):
+        for x in seen[1:]:
+            g = x - dashes[-1]    # from the last dash kept, so blips do not open holes
             if g > 1.6 * spacing:  # dashes hidden by shadows, cars, worn paint
                 k = int(round(g / spacing)) - 1
                 dashes += list(dashes[-1] + g * np.arange(1, k + 1) / (k + 1))
-            if g > 0.6 * spacing:
+            if g > 0.8 * spacing:
                 dashes.append(x)
         # extend to the stretch ends at the same spacing
         while dashes[0] - spacing > s[a] + half:
