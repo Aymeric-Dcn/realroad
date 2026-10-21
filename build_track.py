@@ -51,7 +51,9 @@ DEFAULTS = {
     "verge_m": 2.5,              # blend from the road edge to the terrain over this width
     "verge_outer_m": 7.0,        # the verge strip continues (just under the terrain) to here
     "verge_texture": "ortho",    # "ortho" = the orthophoto (blends with the terrain), "procedural"
-    "roadside_photos": True,     # bake the street-level photos (fetch.py streetview) on the verges
+    "roadside_photos": False,    # bake the street-level photos (fetch.py streetview) on the verges: they
+                                 # were kept on ~1 % of the verge only, the orthophoto + detail shaders
+                                 # look cleaner and the build is 10-15 min shorter
     "roadside_band_m": 12.0,     # verge width when photos are used
     "roadside_piece_m": 50.0,    # one baked texture per piece of verge
     "roadside_texture_px": [1024, 256],
@@ -76,7 +78,8 @@ DEFAULTS = {
     "furniture_posts": True,     # J6 edge posts (laid out by the rules, not surveyed)
     "furniture_lidar": False,    # guard rails / walls from roadside_points.npz: too few points on this
                                  # road (parapets not classified), rock faces taken for walls
-    "furniture_parapets": True,  # low walls on the valley side, laid out by the terrain drop
+    "furniture_parapets": True,  # barriers on the valley side, laid out by the terrain drop
+    "barrier_type": "auto",      # guardrail, parapet (stone, Route Napoléon) or auto (OSM majority, else guard rails)
     "parapet_drop_m": 1.0,       # terrain this much below the road edge within 2.5 m
     "parapet_min_run_m": 20.0,
     "parapet_height_m": 0.65,
@@ -1034,7 +1037,8 @@ def main():
             [{k: v for k, v in r_.items() if not k.startswith("off_")} for r_ in runs], indent=1))
         materials.update(fmat)
         scen += fm
-        print("  road furniture: " + ", ".join(f"{k.replace('_', ' ')} {v:,}" for k, v in fst.items())
+        print("  road furniture: " + ", ".join(f"{k.replace('_', ' ')} {v:,}" if isinstance(v, (int, float)) else
+                                              f"{k.replace('_', ' ')}: {v}" for k, v in fst.items())
               + ("" if (d / "roadside_points.npz").exists() else
                  "  (no LiDAR roadside points: run `python fetch.py roadside` for the guard rails and walls)"))
     for name, mat, sv, sf, suv, keep, *opt in scen:

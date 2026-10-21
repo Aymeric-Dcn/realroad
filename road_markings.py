@@ -44,6 +44,11 @@ DEFAULTS = {
     "min_stretch_m": 25,
     "dash_m": 3.0,
     "edge_line_inset_m": 0.3,  # road_edges.py: edge = edge line + 0.3 m
+    # centre line not seen (trees, shadows, worn paint) on a road that has one
+    # elsewhere: drawn dashed (French T1, 3 m dash / 13 m) where wide enough
+    "centre_fill": True,
+    "centre_fill_min_width_m": 5.2,
+    "centre_fill_min_share": 0.3,   # the road must show a centre line on this share at least
 }
 LINES = ("right", "centre", "left")
 
@@ -118,8 +123,8 @@ def rebuild(on, state, s, q):
     half = q["dash_m"] / 2
     for a, b in runs(state == 1):
         seen = [(s[a + i] + s[a + j - 1]) / 2 for i, j in runs(on[a:b])]
-        if not seen:
-            continue
+        if not seen:                       # filled stretch: nothing seen, standard spacing
+            seen = [s[a] + q["dash_m"]]
         seen = np.array(seen)
         gaps = np.diff(seen)
         spacing = float(np.clip(np.median(gaps), 5.0, 16.0)) if len(gaps) else 13.0
@@ -198,6 +203,17 @@ def main():
     for name in LINES:
         track[name], seen[name] = track_line(score, cb["centres"], expected[name], q)
         state[name] = stretches(seen[name], step, q)
+        if name == "centre" and q["centre_fill"] and np.mean(state[name] > 0) >= q["centre_fill_min_share"]:
+            gap = (state[name] == 0) & (e["width_m"] >= q["centre_fill_min_width_m"])
+            if gap.any():
+                st = state[name].copy()
+                for a_, b_ in runs(gap):
+                    before = st[a_ - 1] if a_ > 0 else 0
+                    after = st[b_] if b_ < len(st) else 0
+                    # continuous on both sides (bend, crest): continuous, otherwise dashed
+                    st[a_:b_] = 2 if (before == 2 and after == 2) else 1
+                state[name] = st
+                print(f"  centre line not seen on {gap.sum() * step:.0f} m of a wide enough road: drawn dashed")
         painted[name] = rebuild(seen[name], state[name], s, q)
     out = d / "road_markings.csv"
     cols = [s] + [painted[n].astype(int) for n in LINES] + [state[n] for n in LINES]

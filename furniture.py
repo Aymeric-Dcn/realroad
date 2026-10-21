@@ -331,7 +331,29 @@ def detect_barriers(road, pts_npz, osm, p):
     return runs
 
 
-def detect_parapets(road, built_up, taken, p):
+def barrier_kind(osm, road, p):
+    """Valley-side barriers: "rail" (galvanised W-beam guard rail, the most
+    common on French departmental roads) or "wall" (low stone / concrete
+    parapet, Route Napoléon). track.barrier_type: guardrail, parapet or auto
+    (auto: what OSM shows most along the road, guard rails if nothing)."""
+    t = p.get("barrier_type", "auto")
+    if t in ("guardrail", "rail"):
+        return "rail"
+    if t in ("parapet", "wall"):
+        return "wall"
+    L = {"rail": 0.0, "wall": 0.0}
+    for pts, tags in osm["ways"]:
+        b = tags.get("barrier")
+        k = "rail" if b in ("guard_rail", "jersey_barrier") else "wall" if b in ("wall", "retaining_wall") else None
+        if k is None:
+            continue
+        d, _ = road.tree.query(pts)
+        if np.median(d) < 15:
+            L[k] += float(np.hypot(*np.diff(pts, axis=0).T).sum())
+    return "wall" if L["wall"] > L["rail"] else "rail"
+
+
+def detect_parapets(road, built_up, taken, p, kind="wall"):
     """Low parapet walls on the valley side. On the Route Napoléon the
     street photos show them wherever the ground drops away beside the road
     (stone or concrete, ~0.65 m). The LiDAR HD barely sees them (a handful of
@@ -369,7 +391,7 @@ def detect_parapets(road, built_up, taken, p):
                 continue
             ss = road.s[ks[g[0]:g[-1] + 1]]
             oo = np.convolve(np.pad(off[g[0]:g[-1] + 1], 5, mode="edge"), np.ones(11) / 11, mode="valid")
-            runs.append({"side": sd, "s0": float(s0), "s1": float(s1), "kind": "wall", "src": "rule",
+            runs.append({"side": sd, "s0": float(s0), "s1": float(s1), "kind": kind, "src": "rule",
                          "off": float(np.median(oo)), "height": p["parapet_height_m"],
                          "off_s": ss, "off_v": oo, "thickness": 0.35})
     return runs
@@ -718,7 +740,9 @@ def build_furniture(d, road, p, ref_regex, tex_dir):
     vmax = maxspeed_profile(road, osm, ref_regex)
     built_up = (vmax > 0) & (vmax <= 50)
     if p["furniture_parapets"]:
-        runs += detect_parapets(road, built_up, blocked, p)
+        kind = barrier_kind(osm, road, p)
+        runs += detect_parapets(road, built_up, blocked, p, kind)
+        stats["valley_barriers"] = "guard rails" if kind == "rail" else "stone parapets"
     L = {"rail": 0.0, "wall": 0.0}
     for r_ in runs:
         if r_["kind"] == "rail":
