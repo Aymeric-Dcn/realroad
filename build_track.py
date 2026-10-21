@@ -971,6 +971,7 @@ def main():
         return mname
 
     n_roadside, cov_all = [0], []
+    verge_mats = set()
     if photos is not None:
         from roadside import OrthoSampler, bake_strip
 
@@ -1018,7 +1019,8 @@ def main():
                     vv = np.column_stack([gx_.ravel(), gy_.ravel(), gz_.ravel()])
                     vuv = np.column_stack([np.clip((gx_.ravel() - bx0) / (bx1 - bx0), 0, 1),
                                            np.clip((gy_.ravel() - by0) / (by1 - by0), 0, 1)])
-                    mname = use_tile(t_)
+                    mname = "v" + use_tile(t_)     # same texture, own material: CSP grass mask of its own
+                    verge_mats.add(mname)
                     add_split(phys_name("GRASS", f"verge_{side[0]}{ci:03d}_{ri}"), mname, vv,
                         grid_faces(b_ - a_ + 1, VX.shape[1]), vuv, "GRASS")
             else:
@@ -1160,6 +1162,11 @@ def main():
         verge_texture(tex / "verge.png")
     if advanced:
         apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n_rock[0])
+
+    # verge copies of the orthophoto materials (shader, maps and texture shared)
+    for vm in sorted(verge_mats):
+        base = materials[vm[1:]]
+        materials[vm] = {**(base if isinstance(base, dict) else {"texture": base}), "diffuse_of": vm[1:]}
 
     dm = dummies(s, x, y, frame, p)
     for dd in dm:

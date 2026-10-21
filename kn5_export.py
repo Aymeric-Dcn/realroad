@@ -96,7 +96,7 @@ def csp_ext_config(materials, trees_list=None, mask=None, built_up=()):
     rain. CSP material filters: `?` matches any end of the name."""
     has = lambda prefix: any(m.startswith(prefix) for m in materials)
     grass = [f for f, ok in (("roadside_?", has("roadside_")), ("ortho_?", has("ortho_")),
-                             ("verge", "verge" in materials)) if ok]
+                             ("vortho_?", has("vortho_")), ("verge", "verge" in materials)) if ok]
     occl = [m for m in ("road", "marking") if m in materials]
     m = {"main": 0.08, "red": 0.35, "min_lum": 0.03, "max_lum": 0.42, **(mask or {})}
     lines = [
@@ -130,6 +130,22 @@ def csp_ext_config(materials, trees_list=None, mask=None, built_up=()):
         "SHAPE_CUT = 0.6",
         "",
     ]
+    if has("vortho_"):
+        # the verge strip: its orthophoto texels mix asphalt, edge line, kerb and
+        # pavement with the grass (pale grey-green): grass only where clearly green
+        lines += [
+            "; verge strip next to the road: grass only where the photo is clearly green",
+            "[GRASS_FX_CONFIGURATION_C]",
+            f"MASK_MAIN_THRESHOLD = {round(min(1.0, 3 * m['main']), 3)}",
+            f"MASK_RED_THRESHOLD = {round(m['red'] / 2, 3)}",
+            f"MASK_MIN_LUMINANCE = {m['min_lum']}",
+            f"MASK_MAX_LUMINANCE = {round(m['max_lum'] - 0.1, 3)}",
+            "",
+            "[GRASS_FX_ADJUSTMENT_VERGE]",
+            "MATERIALS = vortho_?",
+            "MAP = C",
+            "",
+        ]
     for i, (cx, cz, sx, sz) in enumerate(built_up):
         lines += [f"[GRASS_FX_ADJUSTMENT_{i}]", f"CENTER = {cx}, {cz}", f"SIZE = {sx}, {sz}",
                   "ANGLE = 0", "MAP = B", ""]
@@ -830,6 +846,8 @@ def main():
         extra_names = {}
         for m in mat_names:
             spec = specs[m]
+            if spec.get("diffuse_of"):        # shares another material's diffuse
+                continue
             src = tex_dir / spec["texture"]
             if m in far_only:
                 size = (p["ortho_far_texture_px"],) * 2
@@ -854,12 +872,12 @@ def main():
         w.i32(len(mat_names))
         for m in mat_names:
             spec = specs[m]
-            kind = spec.get("kind") or ("terrain" if m.startswith(("ortho_", "backdrop_")) else m)
+            kind = spec.get("kind") or ("terrain" if m.startswith(("ortho_", "vortho_", "backdrop_")) else m)
             props = dict(mats.get(kind, mats["terrain"]))
             props.update(spec.get("props") or {})
             if spec.get("alpha") and not props.get("ksAlphaRef"):
                 props["ksAlphaRef"] = 0.5          # alpha-tested: cut-out below half opacity
-            texs = [("txDiffuse", 0, f"{m}.dds")] + [(slot, idx, extra_names[fname])
+            texs = [("txDiffuse", 0, f"{spec.get('diffuse_of') or m}.dds")] + [(slot, idx, extra_names[fname])
                                                      for slot, idx, fname, _ in spec.get("maps", [])]
             w.material(m, props, texs, shader=spec.get("shader", "ksPerPixel"),
                        alpha_tested=bool(spec.get("alpha")))
@@ -871,7 +889,8 @@ def main():
             k = o["key"]
             verts, faces, uvs = data[f"v{k}"], data[f"f{k}"], data[f"uv{k}"]
             assert len(verts) <= KN5_MAX_VERTS, o["name"]
-            inset = tex_size[o["material"]] if o["material"].startswith(("ortho_", "backdrop_", "roadside_")) else None
+            mt = specs[o["material"]].get("diffuse_of") or o["material"]
+            inset = tex_size[mt] if mt.startswith(("ortho_", "backdrop_", "roadside_")) else None
             vb, centre, radius = kn5_vertices(verts, faces.astype(np.int64), uvs, inset)
             w.mesh(o["name"], vb, faces.astype("<u2"), mat_names.index(o["material"]), centre, radius,
                    lod_out=o.get("lod_out", 0.0), hidden=o.get("hidden", False), shadows=o.get("shadows", True))
