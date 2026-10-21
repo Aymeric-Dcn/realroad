@@ -306,6 +306,43 @@ def plan_sidewalks(road, buildings_geojson, ign_raw, q):
     return out
 
 
+def sidewalk_top(road, ks, sd, ww, h):
+    """Height of the pavement at the kerb: a kerb above the road edge, or the
+    real raised pavement of the LiDAR terrain when it is higher (town
+    centres), smoothed along the road and capped at 45 cm."""
+    from scipy.ndimage import uniform_filter1d
+
+    e = road.edge(ks, sd)
+    ze = road.road_z(ks, e)
+    px, py = road.xy(ks, e + sd * np.maximum(ww * 0.6, 0.5))
+    zg = road.dtm.sample(np.atleast_1d(px), np.atleast_1d(py))
+    zg = np.where(np.isfinite(zg), zg, ze)
+    top = np.clip(np.maximum(ze + h, zg + 0.03), ze + h, ze + 0.45)
+    return uniform_filter1d(top, max(1, min(len(top), int(7 / road.step))), mode="nearest")
+
+
+def clamp_verges(verges, road, plan, q):
+    """Keep the verge strip under the pavement: where it rose above it (ground
+    beside the road higher than the kerb) it covered the pavement with the
+    orthophoto (earth-looking pavements)."""
+    offs = verges["offs"]
+    for side, sd in (("right", -1), ("left", 1)):
+        w = plan[sd]
+        ks = np.flatnonzero(w > 0)
+        if not len(ks):
+            continue
+        top = np.full(len(w), np.nan)
+        for a_, b_ in _runs(w > 0):
+            kk = np.arange(a_, b_)
+            top[kk] = sidewalk_top(road, kk, sd, w[kk], q["sidewalk_kerb_m"])
+        VZ = verges[side][2]
+        cols = np.arange(len(offs))[::-1] if side == "right" else np.arange(len(offs))
+        for ci, o in zip(cols, offs):
+            m = (w > 0) & (o <= w + 0.3)
+            if m.any():
+                VZ[m, ci] = np.minimum(VZ[m, ci], top[m] - 0.06)
+
+
 def build_sidewalks(road, plan, q, acc):
     """Pavement meshes: top at kerb height above the road edge (cross slope 2 %
     towards the road), the kerb face, the outer face down into the ground.
@@ -322,7 +359,7 @@ def build_sidewalks(road, plan, q, acc):
             ze = road.road_z(ks, e)
             pin = np.column_stack(road.xy(ks, e))
             pout = np.column_stack(road.xy(ks, e + sd * ww))
-            zt_in = ze + h
+            zt_in = sidewalk_top(road, ks, sd, ww, h)
             zt_out = zt_in + 0.02 * ww
             ground = road.ground(ks, e + sd * (ww + 0.3)) - 0.3
             n = len(ks)

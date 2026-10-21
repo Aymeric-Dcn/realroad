@@ -1057,6 +1057,7 @@ def main():
         sw_q = {**village.SIDEWALK, **{k: v for k, v in p.items() if k.startswith("sidewalk")}}
         sw_road = _Road(s, x, y, frame, dtm, p["verge_m"])
         sw_plan = village.plan_sidewalks(sw_road, d / "buildings_l93.geojson", d / "route_ign_raw.json", sw_q)
+        village.clamp_verges(verges, sw_road, sw_plan, sw_q)
     print("Terrain…")
     terr = build_terrain(x, y, frame, dtm, ortho, p)
     canopy = Canopy(d / "backdrop" / "mid_mnh.tif") if (d / "backdrop" / "mid_mnh.tif").exists() else None
