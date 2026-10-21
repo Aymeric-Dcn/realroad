@@ -73,6 +73,7 @@ DEFAULTS = {
                                  # faces steeper than 62°, get the rock material
     "rock_repeat_m": 4.0,
     "terrain_mask_px": 256,      # resolution of the terrain shader masks (per 400 m orthophoto tile)
+    "grass_mask": "auto",        # CSP grass colour mask: auto (from the orthophotos) or {main, red, min_lum, max_lum}
     "csp_trees": "auto",         # CSP 3D trees (trees3d.py): auto = when data/<name>/csp_trees/*.bin exist
     "furniture": True,           # guard rails, walls, edge posts, signs, poles (furniture.py)
     "furniture_posts": True,     # J6 edge posts (laid out by the rules, not surveyed)
@@ -713,6 +714,92 @@ def ortho_tile_list(ortho_dir, pattern="ortho_*.jpg"):
     return tiles
 
 
+def grass_mask(ortho, x, y, p, n_tiles=12):
+    """CSP grass colour mask from the orthophotos of this road. CSP grows grass
+    on "green enough, not too bright" texels. Tuned on the dry Provence greens
+    (Route Napoléon: 0.08 / 0.42), it let grass grow on pale grey-green
+    pavements and forest tracks in the lush Vosges (white grass): the
+    greenness threshold now follows the vegetation of the road (2 x its
+    first quartile), the luminance limit its brightness (p90 + 0.03)."""
+    from PIL import Image
+
+    if p.get("grass_mask") not in (None, "auto"):
+        return dict(p["grass_mask"])
+    near = []
+    for t in ortho:
+        x0_, y0_, x1_, y1_ = t["bounds"]
+        cx, cy = (x0_ + x1_) / 2, (y0_ + y1_) / 2
+        near.append((float(np.min(np.hypot(x - cx, y - cy))), t))
+    near.sort(key=lambda v: v[0])
+    px = []
+    for _, t in near[:: max(1, len(near) // n_tiles)][:n_tiles]:
+        im = Image.open(t["file"]).convert("RGB")
+        im = im.reduce(max(1, im.size[0] // 250))
+        px.append(np.asarray(im).reshape(-1, 3).astype(float))
+    if not px:
+        return {"main": 0.08, "red": 0.35, "min_lum": 0.03, "max_lum": 0.42}
+    R, G, B = np.vstack(px).T
+    L = 0.3 * R + 0.59 * G + 0.11 * B
+    g = (G - np.maximum(R, B)) / np.maximum(L, 1.0)
+    veg = g > 0.02
+    if veg.sum() < 100:
+        return {"main": 0.08, "red": 0.35, "min_lum": 0.03, "max_lum": 0.42}
+    main = float(np.clip(2 * np.percentile(g[veg], 25), 0.08, 0.3))
+    max_lum = float(np.clip(np.percentile(L[veg] / 255, 90) + 0.03, 0.35, 0.46))
+    return {"main": round(main, 3), "red": 0.35, "min_lum": 0.03, "max_lum": round(max_lum, 3)}
+
+
+def built_up_areas(path, x, y, x0, y0, cell=40.0, reach=150.0):
+    """Rectangles (track X, Z centre and size) around the BD TOPO buildings near
+    the road: CSP grass gets a stricter mask there (pavements, yards)."""
+    if not path.exists():
+        return []
+    fc = json.loads(path.read_text(encoding="utf-8"))
+    pts = []
+    for f in fc.get("features", []):
+        g = f.get("geometry") or {}
+        polys = [g["coordinates"]] if g.get("type") == "Polygon" else g.get("coordinates", []) \
+            if g.get("type") == "MultiPolygon" else []
+        for poly in polys:
+            if poly:
+                pts.append(np.asarray(poly[0], float)[:, :2])
+    if not pts:
+        return []
+    P = np.vstack(pts)
+    d_, _ = cKDTree(np.column_stack([x, y])).query(P)
+    P = P[d_ < reach]
+    if not len(P):
+        return []
+    gx0, gy0 = np.floor(P.min(0) / cell) * cell - cell
+    ij = np.floor((P - [gx0, gy0]) / cell).astype(int)
+    nx_, ny_ = ij.max(0) + 2
+    occ = np.zeros((nx_ + 1, ny_ + 1), bool)
+    occ[ij[:, 0], ij[:, 1]] = True
+    from scipy.ndimage import binary_dilation
+
+    occ = binary_dilation(occ, iterations=1)
+    rects, used = [], np.zeros_like(occ)
+    for j in range(occ.shape[1]):          # greedy: runs along x, grown along y
+        i = 0
+        while i < occ.shape[0]:
+            if not occ[i, j] or used[i, j]:
+                i += 1
+                continue
+            i1 = i
+            while i1 + 1 < occ.shape[0] and occ[i1 + 1, j] and not used[i1 + 1, j]:
+                i1 += 1
+            j1 = j
+            while j1 + 1 < occ.shape[1] and occ[i:i1 + 1, j1 + 1].all() and not used[i:i1 + 1, j1 + 1].any():
+                j1 += 1
+            used[i:i1 + 1, j:j1 + 1] = True
+            cx_ = gx0 + (i + i1 + 1) / 2 * cell
+            cy_ = gy0 + (j + j1 + 1) / 2 * cell
+            rects.append([round(cx_ - x0, 1), round(-(cy_ - y0), 1),
+                          round((i1 - i + 1) * cell, 1), round((j1 - j + 1) * cell, 1)])
+            i = i1 + 1
+    return rects
+
+
 def dummies(s, x, y, frame, p):
     """AC empties. Forward = direction of travel, cars drive on the right."""
     L = s[-1]
@@ -1085,6 +1172,8 @@ def main():
         "length_m": float(s[-1]),
         "objects": objects, "materials": materials, "dummies": dm,
         "far_only_materials": far_only,
+        "csp_grass_mask": grass_mask(ortho, x, y, p),
+        "csp_grass_built_up": built_up_areas(d / "buildings_l93.geojson", x, y, x0, y0),
         "csp_trees": csp_list,            # CSP 3D trees: [species, x, y, z, angle, size, width] (kn5_export.py)   # textures only seen from afar: kn5_export uses a lower resolution
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
