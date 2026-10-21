@@ -43,6 +43,7 @@ STEPS = [
     ("buildings", ["fetch.py", "buildings"], "BD TOPO buildings (optional)"),
     ("streetview", ["fetch.py", "streetview"], "Panoramax street-level photos (optional)"),
     ("roadside", ["fetch.py", "roadside"], "guard rails, walls, signs: OSM + LiDAR (optional)"),
+    ("assets", ["assets.py"], "free CC0 textures and tree sprites, shared by all roads (optional)"),
     ("road_profile", ["road_profile.py"], "elevation, crossfall, bridges"),
     ("road_edges", ["road_edges.py"], "real carriageway edges"),
     ("road_markings", ["road_markings.py"], "real centre and edge lines"),
@@ -53,8 +54,8 @@ STEPS = [
     ("streetview_sheet", ["streetview_sheet.py"], "street-level comparison sheet (optional)"),
 ]
 
-OPTIONAL = {"far", "mnh", "buildings", "streetview", "roadside", "trees3d", "trees", "streetview_sheet"}
-DOWNLOADS = {"osm", "mnt", "ortho", "lidar", "far", "mnh", "buildings", "streetview", "roadside"}
+OPTIONAL = {"far", "mnh", "buildings", "streetview", "roadside", "assets", "trees3d", "trees", "streetview_sheet"}
+DOWNLOADS = {"osm", "mnt", "ortho", "lidar", "far", "mnh", "buildings", "streetview", "roadside", "assets"}
 # Street-level photos only serve the comparison sheet: skipped unless asked for
 SKIP_BY_DEFAULT = {"streetview", "streetview_sheet"}
 
