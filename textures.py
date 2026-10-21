@@ -42,7 +42,7 @@ def _fbm(rng, h, w, scales=(64, 24, 9)):
     return out / max(out.max(), 1e-6)
 
 
-def _crown(rng, clumps, base_rgb, w=CELL_W, h=CELL_H, density=0.55):
+def _crown(rng, clumps, base_rgb, w=CELL_W, h=CELL_H, density=0.55, photo=None):
     """Alpha and colour of a crown made of clumps (cx, cy, rx, ry) in pixels:
     mostly filled inside, ragged leafy edges, light from the upper left."""
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
@@ -64,6 +64,16 @@ def _crown(rng, clumps, base_rgb, w=CELL_W, h=CELL_H, density=0.55):
     # small gaps inside the crown (sky seen through it)
     alpha *= (fbm + 0.3 * leaves > 0.18 + 0.25 * (1 - density)).astype(np.float32)
     base = np.array(base_rgb, np.float32) / 255.0
+    if photo is not None:
+        # photographed twigs / leaves (photo_tex.foliage_fill): their outlines
+        # cut the crown edge and the gaps, their detail gives the texture
+        inner = np.clip((np.sqrt(env) - 0.3) / 0.4, 0, 1)
+        alpha = ((field > 0.36) & ((photo[..., 3] > 0.5) | (inner > 0.6))).astype(np.float32)
+        pa = photo[..., 3:4] > 0.5
+        # inside the crown between the sprites: deep shade, not black
+        var = np.where(pa, 0.85 * photo[..., :3] + 0.15 * (0.85 + 0.3 * fbm[..., None]), 0.5)
+        col = np.clip(base * var * (0.72 + 0.55 * shade[..., None]), 0, 1)
+        return alpha, col
     var = 0.78 + 0.35 * leaves[..., None] + 0.2 * (fbm[..., None] - 0.5)
     col = np.clip(base * var * (0.72 + 0.55 * shade[..., None]), 0, 1)
     return alpha, col
@@ -73,8 +83,16 @@ def _trunk(draw, x0, y0, x1, y1, w0, w1, col):
     draw.polygon([(x0 - w0, y0), (x0 + w0, y0), (x1 + w1, y1), (x1 - w1, y1)], fill=col)
 
 
-def _cell(kind, variant, palette, seed):
+def _cell(kind, variant, palette, seed, photo=None):
+    """photo: sprite sets of photo_tex.foliage_sets (None = drawn leaves)."""
     rng = np.random.default_rng(seed)
+    fill = None
+    if photo:
+        from photo_tex import foliage_fill
+
+        sprs = photo["conifer" if kind == "pine" else kind]
+        fill = foliage_fill(sprs, CELL_W, CELL_H, np.random.default_rng(seed + 100),
+                            size_px=150 if kind == "pine" else 34)
     w, h = CELL_W, CELL_H
     rgba = np.zeros((h, w, 4), np.float32)
     trunk_img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -94,18 +112,18 @@ def _cell(kind, variant, palette, seed):
             cx = w / 2 + lean + rng.normal(0, 0.16 * w)
             cy = (0.08 + (top_y / h - 0.02) * (i + rng.random()) / n) * h
             clumps.append((cx, cy, rng.uniform(0.18, 0.28) * w, rng.uniform(0.05, 0.08) * h))
-        alpha, col = _crown(rng, clumps, palette["pine"], density=0.9)
+        alpha, col = _crown(rng, clumps, palette["pine"], density=0.9, photo=fill)
     elif kind == "broadleaf":
         # holm / downy oak: short trunk, dense round crown
         _trunk(td, w / 2, h, w / 2 + rng.uniform(-15, 15), 0.6 * h, 16, 10, bark)
         clumps = [(w / 2 + rng.normal(0, 0.12 * w), rng.uniform(0.22, 0.6) * h,
                    rng.uniform(0.2, 0.3) * w, rng.uniform(0.12, 0.17) * h) for _ in range(8)]
-        alpha, col = _crown(rng, clumps, palette["broadleaf"], density=0.95)
+        alpha, col = _crown(rng, clumps, palette["broadleaf"], density=0.95, photo=fill)
     else:
         # garrigue shrub / young tree: crown down to the ground
         clumps = [(w / 2 + rng.normal(0, 0.15 * w), rng.uniform(0.35, 0.85) * h,
                    rng.uniform(0.22, 0.32) * w, rng.uniform(0.15, 0.22) * h) for _ in range(9)]
-        alpha, col = _crown(rng, clumps, palette["shrub"], density=0.95)
+        alpha, col = _crown(rng, clumps, palette["shrub"], density=0.95, photo=fill)
     t = np.asarray(trunk_img, np.float32) / 255.0
     rgba[..., :3] = t[..., :3] * t[..., 3:] * (1 - alpha[..., None]) + col * alpha[..., None]
     rgba[..., 3] = np.maximum(alpha, t[..., 3])
@@ -145,10 +163,10 @@ def foliage_palette(palette):
     return out
 
 
-def tree_atlas(path, palette, seed=7):
+def tree_atlas(path, palette, seed=7, photo=None):
     palette = foliage_palette(palette)
     cells = [("pine", 0), ("pine", 1), ("broadleaf", 0), ("shrub", 0)]
-    atlas = np.concatenate([_cell(k, v, palette, seed + i) for i, (k, v) in enumerate(cells)], axis=1)
+    atlas = np.concatenate([_cell(k, v, palette, seed + i, photo) for i, (k, v) in enumerate(cells)], axis=1)
     atlas = bleed(atlas)
     Image.fromarray((np.clip(atlas, 0, 1) * 255).astype(np.uint8), "RGBA").save(path)
     return path
@@ -163,7 +181,7 @@ FOLIAGE_CELLS = 4
 FOLIAGE_CELL = {0: 0, 1: 2, 2: 3}   # pine (0 or 1), broadleaf, shrub
 
 
-def foliage_atlas(path, palette, seed=17):
+def foliage_atlas(path, palette, seed=17, photo=None):
     """Square leafy clumps (512 x 512 each) for the foliage cards placed
     inside the crowns: 0, 1 pine needles (darker, ragged), 2 broadleaf, 3 shrub."""
     palette = foliage_palette(palette)
@@ -175,7 +193,13 @@ def foliage_atlas(path, palette, seed=17):
         clumps = [(w / 2 + rng.normal(0, 0.13 * w), h / 2 + rng.normal(0, 0.13 * h),
                    rng.uniform(0.16, 0.26) * w, rng.uniform(0.12, 0.2 if name == "pine" else 0.24) * h)
                   for _ in range(n)]
-        alpha, col = _crown(rng, clumps, palette[name], w=w, h=h, density=0.95)
+        fill = None
+        if photo:
+            from photo_tex import foliage_fill
+
+            fill = foliage_fill(photo["conifer" if name == "pine" else name], w, h,
+                                np.random.default_rng(seed + 100 + i), size_px=120 if name == "pine" else 30)
+        alpha, col = _crown(rng, clumps, palette[name], w=w, h=h, density=0.95, photo=fill)
         rgba = np.zeros((h, w, 4), np.float32)
         rgba[..., :3] = col
         rgba[..., 3] = alpha

@@ -73,6 +73,7 @@ DEFAULTS = {
                                  # faces steeper than 62°, get the rock material
     "rock_repeat_m": 4.0,
     "terrain_mask_px": 256,      # resolution of the terrain shader masks (per 400 m orthophoto tile)
+    "photo_textures": True,      # CC0 photo textures (assets.py) where available, else procedural
     "grass_mask": "auto",        # CSP grass colour mask: auto (from the orthophotos) or {main, red, min_lum, max_lum}
     "csp_trees": "auto",         # CSP 3D trees (trees3d.py): auto = when data/<name>/csp_trees/*.bin exist
     "furniture": True,           # guard rails, walls, edge posts, signs, poles (furniture.py)
@@ -642,7 +643,7 @@ def build_backdrop(st_x, st_y, d, p):
     return meshes
 
 
-def apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n_rock):
+def apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n_rock, assets=None, climate="temperate"):
     """Kunos shaders with detail and normal maps (setups copied from Kunos
     tracks): the road gets asphalt grain, relief and specular maps
     (ksPerPixelMultiMap_NMDetail), steep faces a limestone rock texture with
@@ -655,6 +656,11 @@ def apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n
 
     # road: diffuse with a (nearly) black alpha = the detail texture shows everywhere
     road_textures(tex, tex / "asphalt.png")
+    import photo_tex
+
+    photo = []
+    if assets and photo_tex.road_photo(assets, tex, tex / "asphalt.png"):
+        photo.append("asphalt")
     a = Image.open(tex / "asphalt.png").convert("RGB")
     a.putalpha(Image.new("L", a.size, 5))
     a.save(tex / "asphalt_a.png")
@@ -665,9 +671,13 @@ def apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n
                                                  ["txNormalDetail", 4, "road_detail_nm.png", "dxt1"]]}
     if n_rock:
         rock_textures(tex)
+        if assets and photo_tex.rock_photo(assets, tex):
+            photo.append("rock faces")
         materials["rock"] = {"texture": "rock.png", "shader": "ksPerPixelNM", "kind": "rock",
                              "maps": [["txNormal", 1, "rock_nm.png", "dxt1"]]}
     terrain_detail_textures(tex)
+    if assets and photo_tex.terrain_photo(assets, tex, climate):
+        photo.append("terrain detail")
     n = p["terrain_mask_px"]
     n_ml = 0
     for t_ in ortho:
@@ -695,7 +705,8 @@ def apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n
                                      ["txDetailNM", 21, "det_flat_nm.png", "dxt1"]]}
         n_ml += 1
     print(f"  shaders: road with detail and relief, {n_rock:,} rock triangles, {n_ml} terrain tiles "
-          f"with detail layers")
+          f"with detail layers" + (f"; photo textures: {', '.join(photo)}" if photo else
+                                   "; procedural textures (run `python assets.py` for photographed ones)"))
 
 
 def ortho_tile_list(ortho_dir, pattern="ortho_*.jpg"):
@@ -1105,18 +1116,47 @@ def main():
             (out / "csp_trees").mkdir(exist_ok=True)
             from trees3d import fix_bin
 
+            photo_dir = None
+            if p["photo_textures"]:
+                # photographed twigs, leaves and bark (assets.py), tinted to this road's trees
+                import photo_tex
+                from fetch import TO_WGS as _wgs
+
+                assets = photo_tex.assets_dir(d.parent)
+                lon_, lat_ = _wgs.transform(float(np.mean(x)), float(np.mean(y)))
+                climate = photo_tex.climate_of(lat_, lon_)
+                pal_f_ = d / "trees_palette.json"
+                pal_ = json.loads(pal_f_.read_text()) if pal_f_.exists() else {
+                    "pine": [62, 78, 52], "broadleaf": [88, 100, 66], "shrub": [104, 104, 74]}
+                photo_dir = out / "csp_trees" / "_tex"
+                photo_dir.mkdir(exist_ok=True)
+                if assets and photo_tex.csp_leaves(assets, pal_, photo_dir, climate):
+                    photo_tex.csp_bark(assets, photo_dir)
+                    print(f"  CSP trees: photo twigs and leaves ({climate}: "
+                          f"{photo_tex.CONIFER[climate].split('_')[0]} for the conifers)")
+                else:
+                    photo_dir = None
+                    print("  (no photo assets: run `python assets.py` for photographed tree textures)")
             for b in csp_bins:
                 filled = fix_bin(b, csp_dir if (csp_dir / "leaves.png").exists() else csp_dir / "src",
-                                 out / "csp_trees" / b.name)
-                if filled:
+                                 out / "csp_trees" / b.name, replace_dir=photo_dir)
+                if filled and not photo_dir:
                     print(f"  {b.name}: textures added ({', '.join(filled)})")
         pal_f = d / "trees_palette.json"
         pal = json.loads(pal_f.read_text()) if pal_f.exists() else {
             "pine": [62, 78, 52], "broadleaf": [88, 100, 66], "shrub": [104, 104, 74]}
-        tree_atlas(tex / "trees.png", pal)
+        photo_sets = None
+        if p["photo_textures"]:
+            import photo_tex
+            from fetch import TO_WGS as _wgs
+
+            _lon, _lat = _wgs.transform(float(np.mean(x)), float(np.mean(y)))
+            _assets = photo_tex.assets_dir(d.parent)
+            photo_sets = photo_tex.foliage_sets(_assets, photo_tex.climate_of(_lat, _lon)) if _assets else None
+        tree_atlas(tex / "trees.png", pal, photo=photo_sets)
         materials["trees"] = {"texture": "trees.png", "shader": "ksTree", "alpha": True, "kind": "trees"}
         if ts.get("cards"):
-            foliage_atlas(tex / "foliage.png", pal)
+            foliage_atlas(tex / "foliage.png", pal, photo=photo_sets)
             materials["foliage"] = {"texture": "foliage.png", "shader": "ksTree", "alpha": True, "kind": "trees"}
         scen += tm
         print(f"  trees: {ts['trees']:,} trees{' (CSP 3D models)' if use_csp else ''}, {ts['bushes']:,} bushes, "
@@ -1161,7 +1201,13 @@ def main():
     if "verge" in materials:
         verge_texture(tex / "verge.png")
     if advanced:
-        apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n_rock[0])
+        import photo_tex
+        from fetch import TO_WGS as _wgs
+
+        _lon, _lat = _wgs.transform(float(np.mean(x)), float(np.mean(y)))
+        apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n_rock[0],
+                               assets=photo_tex.assets_dir(d.parent) if p["photo_textures"] else None,
+                               climate=photo_tex.climate_of(_lat, _lon))
 
     # verge copies of the orthophoto materials (shader, maps and texture shared)
     for vm in sorted(verge_mats):

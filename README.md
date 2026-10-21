@@ -90,6 +90,7 @@ python fetch.py mnh      # hauteur de la végétation (LiDAR HD) pour les arbres
 python fetch.py buildings  # bâtiments BD TOPO (emprise, hauteurs)
 python fetch.py streetview # photos 360° Panoramax le long de la route
 python fetch.py roadside   # glissières, murets, panneaux, poteaux : OSM + points LiDAR hors sol
+python assets.py           # une fois : textures photo libres (CC0) pour la route, la roche, le sol, les arbres
 python road_profile.py   # vrai profil de la chaussée : altitude, dévers, ponts
 python road_edges.py     # vrais bords de la chaussée : largeur et centre réels
 python road_markings.py  # vrais marquages : ligne centrale et lignes de rive
@@ -198,6 +199,7 @@ python fetch.py mnh      # vegetation height (LiDAR HD) for the trees
 python fetch.py buildings  # BD TOPO buildings (footprint, heights)
 python fetch.py streetview # Panoramax 360° photos along the road
 python fetch.py roadside   # guard rails, walls, signs, poles: OSM + above-ground LiDAR points
+python assets.py           # once: free (CC0) photo textures for the road, rock, ground and trees
 python road_profile.py   # real road surface: elevation, crossfall, bridges
 python road_edges.py     # real carriageway edges: true width and centre
 python road_markings.py  # real markings: centre line and edge lines
@@ -261,3 +263,7 @@ Downloads resume where they stopped. Data goes to `data/<section-name>/`
 - Panoramax — photos © IGN et contributeurs / IGN and contributors, licence indiquée par photo /
   licence given per photo (Etalab 2.0 pour l'IGN / for IGN); non redistribuées ici / not
   redistributed here
+- Textures / textures: [ambientCG](https://ambientcg.com) (Road012A, Asphalt031, Rock051,
+  Rock058, Grass004, Ground078, Ground110) and / et [Poly Haven](https://polyhaven.com)
+  (fir_tree_01, pine_tree_01, tree_small_02, shrub_02) — CC0, downloaded by / téléchargées par
+  `python assets.py`, not redistributed here / non redistribuées ici

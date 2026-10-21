@@ -297,10 +297,12 @@ def leaves_textures(out, palette, seed=9):
     Image.fromarray(_normal_from_height(hgt_all * 4)).save(out / "leaves_normal.png")
 
 
-def fix_bin(bin_path, tex_dir, dst=None):
+def fix_bin(bin_path, tex_dir, dst=None, replace_dir=None):
     """CSP tree .bin = zip archive. Fill the texture entries the converter left
-    empty with the generated textures (black trees otherwise). Returns the
-    names filled."""
+    empty with the generated textures (black trees otherwise); with
+    replace_dir, the textures found there replace those of the archive (photo
+    textures, per road: no new conversion needed, the geometry and its UV
+    layout are the same). Returns the names filled or replaced."""
     import shutil
     import zipfile
 
@@ -315,7 +317,11 @@ def fix_bin(bin_path, tex_dir, dst=None):
     out = []
     for info, data in items:
         src = Path(tex_dir) / info.filename
-        if len(data) == 0 and src.exists():
+        rep = Path(replace_dir) / info.filename if replace_dir else None
+        if rep is not None and rep.exists() and info.filename != "tree.ini":
+            data = rep.read_bytes()
+            filled.append(info.filename)
+        elif len(data) == 0 and src.exists():
             data = src.read_bytes()
             filled.append(info.filename)
         out.append((info.filename, data))
