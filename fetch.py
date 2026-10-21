@@ -18,6 +18,7 @@ All geometries are in Lambert-93 (EPSG:2154), in metres.
 import argparse
 import json
 import math
+import re
 import sys
 import time
 from pathlib import Path
@@ -51,9 +52,21 @@ TO_WGS = Transformer.from_crs(2154, 4326, always_xy=True)
 
 
 # ------------------------------------------------------------------ helpers
+# Defaults for a road file: a new road only needs name, start and end
+CFG_DEFAULTS = {"corridor_m": 40, "terrain_margin_m": 300, "lidar_classes": [2, 17], "keep_raw_laz": False,
+                "ortho_res_m": 0.2, "backdrop_m": 8000, "trees_margin_m": 250, "buildings_margin_m": 250,
+                "streetview_step_m": 20, "roadside_band_m": 18, "data_dir": "data"}
+
+
 def load_cfg(path):
     with open(path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+    for k, v in CFG_DEFAULTS.items():
+        cfg.setdefault(k, v)
+    tr = cfg.setdefault("track", {}) or {}
+    cfg["track"] = tr
+    tr.setdefault("id", "realroad_" + re.sub(r"[^a-z0-9]+", "_", cfg["name"].lower()).strip("_"))
+    tr.setdefault("title", cfg["name"].replace("-", " ").title())
     cfg["_dir"] = Path(cfg.get("data_dir", "data")) / cfg["name"]
     cfg["_dir"].mkdir(parents=True, exist_ok=True)
     return cfg

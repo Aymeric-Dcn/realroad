@@ -50,12 +50,33 @@ pip install -r requirements.txt
 
 ### Utilisation
 
-Le tronçon se décrit dans `config.yaml` (points de départ/arrivée, numéro de
-route, largeur du couloir…). Ensuite, une seule commande :
+Une nouvelle route, en une commande : un nom, le point de départ et le point
+d'arrivée (clic droit dans Google Maps ou Géoportail → copier les coordonnées) :
 
 ```powershell
-python realroad.py --install "C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"
+python realroad.py --name gourdon-caussols --start 43.72130,6.97700 --end 43.74209,6.90447 --install --clean
 ```
+
+Elle écrit `roads/<nom>.yaml`, trouve le trajet (les plus grosses routes entre
+les deux points, ou `--ref D12` pour suivre un numéro), annonce la place et le
+temps nécessaires avant de télécharger, puis construit la piste et l'installe
+dans Assetto Corsa (trouvé tout seul dans les bibliothèques Steam ; sinon
+`--install "<dossier assettocorsa>"`). Avec `--clean`, les téléchargements et
+fichiers de travail sont supprimés à la fin : il ne reste que la piste.
+
+```text
+Road: 10.2 km, 18 IGN tiles of 1 km².
+  downloads and work files: ~1.2 GB in data\gourdon-caussols
+  space needed now: ~1.6 GB (free: 120.3 GB)
+  track left in Assetto Corsa: ~245 MB in …\assettocorsa\content\tracks
+  --clean: the ~1.2 GB of work files are deleted at the end
+  time: ~29 min, mostly downloads (depends on your connection)
+Go on? [Y/n]
+```
+
+Une route déjà décrite : `python realroad.py -c roads\gourdon-caussols.yaml --install`
+(`config.yaml` par défaut, la Route Napoléon). Les réglages possibles sont
+commentés dans `config.yaml` ; tout ce qui n'est pas indiqué a une valeur par défaut.
 
 Elle enchaîne toutes les étapes, qu'on peut aussi lancer une par une :
 
@@ -147,12 +168,23 @@ pip install -r requirements.txt
 
 ### Usage
 
-A section is described in `config.yaml` (start/end points, road number,
-corridor width…). Then one command:
+A new road, in one command: a name, the start and the end point (right-click
+in Google Maps or Géoportail → copy the coordinates):
 
 ```powershell
-python realroad.py --install "C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"
+python realroad.py --name gourdon-caussols --start 43.72130,6.97700 --end 43.74209,6.90447 --install --clean
 ```
+
+It writes `roads/<name>.yaml`, finds the route (the bigger roads between the
+points, or `--ref D12` to follow one number), tells the disk space and time
+needed before downloading, then builds the track and installs it in Assetto
+Corsa (found in the Steam libraries; otherwise `--install "<assettocorsa
+folder>"`). With `--clean` the downloads and work files are deleted at the
+end: only the track is left.
+
+A road already described: `python realroad.py -c roads\gourdon-caussols.yaml --install`
+(`config.yaml` by default, the Route Napoléon). The settings are commented in
+`config.yaml`; anything not set has a default.
 
 It chains every step, which can also be run one by one:
 
