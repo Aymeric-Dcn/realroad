@@ -47,6 +47,9 @@ DEFAULTS = {
     "shrub_max_distance_m": 35.0,
     "shrub_cell_m": 2.0,       # one bush per cell of low vegetation
     "max_shrubs": 60000,
+    # BD TOPO buildings (fetch.py buildings): no tree in a house, crowns kept off the walls
+    "building_clearance_m": 1.0,
+    "min_crown_r_m": 1.2,
 }
 
 
@@ -266,6 +269,50 @@ def plot(path, t, kind, sx, sy):
     plt.savefig(path, dpi=110)
 
 
+def clear_buildings(path, t, q):
+    """Drop the trees standing in (or against) a BD TOPO building and shrink
+    the crowns that would go through a wall. The canopy height model has no
+    buildings, but its edges and the vegetation on roofs and in courtyards
+    give tree peaks inside the footprints. Returns (trees, removed, shrunk)."""
+    if not path.exists() or not len(t):
+        return t, 0, 0
+    from matplotlib.path import Path as MplPath
+
+    fc = json.loads(path.read_text(encoding="utf-8"))
+    rings = []
+    for f in fc.get("features", []):
+        g = f.get("geometry") or {}
+        polys = [g["coordinates"]] if g.get("type") == "Polygon" else g.get("coordinates", []) \
+            if g.get("type") == "MultiPolygon" else []
+        rings += [np.asarray(p[0], float)[:, :2] for p in polys if p and len(p[0]) >= 4]
+    if not rings:
+        return t, 0, 0
+    # wall points every 0.5 m: distance from a tree to the nearest wall
+    pts = []
+    for r in rings:
+        a, b = r[:-1], r[1:]
+        n = np.maximum(1, np.ceil(np.hypot(*(b - a).T) / 0.5).astype(int))
+        for (x0, y0), (x1, y1), k in zip(a, b, n):
+            u = np.arange(k) / k
+            pts.append(np.column_stack([x0 + (x1 - x0) * u, y0 + (y1 - y0) * u]))
+    pts = np.vstack(pts)
+    dist = cKDTree(pts).query(t[:, :2], distance_upper_bound=60)[0]
+    inside = np.zeros(len(t), bool)
+    cand = np.flatnonzero(np.isfinite(dist))
+    xy = t[cand, :2]
+    for r in rings:
+        (x0, y0), (x1, y1) = r.min(0), r.max(0)
+        m = (xy[:, 0] >= x0) & (xy[:, 0] <= x1) & (xy[:, 1] >= y0) & (xy[:, 1] <= y1)
+        if m.any():
+            inside[cand[m]] |= MplPath(r).contains_points(xy[m])
+    drop = inside | (dist < q["building_clearance_m"])
+    t = t[~drop].copy()
+    dist = dist[~drop]
+    over = t[:, 3] > np.maximum(dist, q["min_crown_r_m"])
+    t[over, 3] = np.maximum(dist[over], q["min_crown_r_m"])
+    return t, int(drop.sum()), int(over.sum())
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-c", "--config", default="config.yaml")
@@ -283,6 +330,10 @@ def main():
         n_sh = len(sh)
         t = np.concatenate([t, sh]) if n_sh else t
         kind = np.concatenate([kind, np.full(n_sh, 3, int)])
+    t, n_in, n_shrunk = clear_buildings(d / "buildings_l93.geojson", np.column_stack([t[:, :4], kind]), q)
+    kind = t[:, 4].astype(int)
+    if n_in or n_shrunk:
+        print(f"  buildings: {n_in} trees in or against a house removed, {n_shrunk} crowns kept off the walls")
     np.savetxt(d / "trees.csv", np.column_stack([t[:, :4], kind]), delimiter=",",
                fmt=["%.2f", "%.2f", "%.2f", "%.2f", "%d"], header="x,y,height_m,crown_r_m,kind", comments="")
     (d / "trees_palette.json").write_text(json.dumps(pal, indent=1), encoding="utf-8")

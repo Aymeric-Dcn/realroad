@@ -63,6 +63,10 @@ DEFAULTS = {
     "direct_tol_m": (1.5, 2.5),  # (narrower, wider) where an edge line was seen within ~10 m
     "guess_tol_m": (1.0, 0.75),  # elsewhere
     "final_sigma_m": 6.0,
+    # centre marking off the road axis (centre_shift)
+    "narrow_suspect_m": 4.5,     # narrower than this: check from the centre marking
+    "centre_shift_max_m": 2.6,
+    "centre_shift_intensity_tol": 0.25,
 }
 
 
@@ -262,6 +266,54 @@ def centre_line(score, centres, left_line, right_line, found_l, found_r, step, q
     return centres[j], np.isfinite(cand[np.arange(len(score)), j])
 
 
+def centre_shift(cnt, inten, score, centres, s, q):
+    """Offset of the centre marking from the road axis (OSM / BD TOPO), smoothed
+    along the road; 0 where there is no centre marking. The axis can run 1-2 m
+    off the real centre (D45 to Dabo: on the right lane); the edges are then
+    looked for from the marking, so that the centre line is not taken for an
+    edge line. A peak counts as the centre marking only with asphalt on both
+    sides (same LiDAR intensity at ±1.5 m): an edge line has the verge outside."""
+    st = float(np.median(np.diff(s)))
+    bin_m = centres[1] - centres[0]
+    w = cnt.astype(float)
+    P = lambda a: uniform_filter1d(a, q["line_pool"], axis=0, mode="nearest")
+    I = np.where(np.isfinite(inten), inten, 0.0).astype(float)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        Ip = P(I * w) / P(w)
+    lim = q["centre_shift_max_m"]
+    near = np.abs(centres) <= lim
+    pk = (score > q["line_threshold"]) & (score >= np.roll(score, 1, 1)) & (score >= np.roll(score, -1, 1)) & near[None, :]
+    k15 = int(round(1.5 / bin_m))
+    j_all = np.arange(len(centres))
+    jl, jr = np.clip(j_all + k15, 0, len(centres) - 1), np.clip(j_all - k15, 0, len(centres) - 1)
+    il, ir = Ip[:, jl], Ip[:, jr]
+    ref = np.nanmedian(np.where(near[None, :], Ip, np.nan), axis=1)[:, None]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        same = np.abs(il - ir) / np.maximum(ref, 1e-6) < q["centre_shift_intensity_tol"]
+    cand = np.where(pk & same, score, -np.inf)
+    j = np.argmax(cand, 1)
+    found = np.isfinite(cand[np.arange(len(s)), j])
+    c = centres[j] + bin_m / 2
+    if found.sum() < 2:
+        return np.zeros(len(s))
+    win = int(51 / st) | 1
+    cm = median_filter(np.interp(s, s[found], c[found]), size=win, mode="nearest")
+    share = uniform_filter1d(found.astype(float), win, mode="nearest")
+    c0 = np.where(share > 0.3, cm, 0.0)
+    return np.clip(gaussian_filter1d(c0, 10 / st, mode="nearest"), -lim, lim)
+
+
+def shift_bins(a, c0, bin_m, fill):
+    """Re-centre each cross-section on t = c0 (a: stations x bins [x ...])."""
+    n, nb = a.shape[:2]
+    k = np.round(c0 / bin_m).astype(int)
+    j = np.arange(nb)[None, :] + k[:, None]
+    ok = (j >= 0) & (j < nb)
+    out = a[np.arange(n)[:, None], np.clip(j, 0, nb - 1)]
+    out[~ok] = fill
+    return out, k * bin_m
+
+
 def mirror(left, right, found_l, found_r, c, found_c, off):
     """Rebuild an edge whose line is hidden (trees, shadows) by symmetry of the
     other edge about the centre marking: both lanes have the same width."""
@@ -290,6 +342,50 @@ def regularize(s, L, R, direct_l, direct_r, c, found_c, bd, q):
         hh = gaussian_filter1d(np.clip(sg * (e - cc), lo, hi), q["final_sigma_m"] / st, mode="nearest")
         out.append(cc + sg * hh)
     return out[0], out[1], cc
+
+
+def measure(s, cnt, res, inten, have, score, centres, bd, q):
+    """Edges and centre (offsets from the road axis) from the binned cross-sections."""
+    step = step_edges(cnt, res, inten, centres, q)
+    lines = line_edges(score, centres, step, q)
+    (ll, fl), (rl, fr) = lines["left"], lines["right"]
+    c_line, fc = centre_line(score, centres, ll, rl, fl, fr, step, q)
+    ll, fl, rl, fr = mirror(ll, rl, fl, fr, c_line, fc, q["line_offset_m"])
+    L, okL = fuse(s, ll, fl, step["left"], bd / 2, 1, q)
+    R, okR = fuse(s, rl, fr, step["right"], bd / 2, -1, q)
+    near = lambda ok_: gaussian_filter1d(ok_.astype(float), 5.0) > 0.2
+    L, R, centre = regularize(s, L, R, near(okL), near(okR), c_line, fc, bd, q)
+    return L, R, centre, okL, okR, fc
+
+
+def edges_from_bins(s, cnt, res, inten, rgb, have, centres, bd, q):
+    """Carriageway edges and centre, as offsets from the road axis."""
+    score = marking_score(cnt, inten, rgb, have, centres, q)
+    L, R, centre, okL, okR, fc = measure(s, cnt, res, inten, have, score, centres, bd, q)
+    # Where that gives an implausibly narrow road, the axis may run along one
+    # lane and the centre line be taken for an edge: measure again from the
+    # centre marking there (only there: on 3-lane roads the shift picks a lane line)
+    width = L - R
+    narrow = width < q["narrow_suspect_m"]
+    if narrow.any():
+        bin_m = centres[1] - centres[0]
+        c0 = centre_shift(cnt, inten, score, centres, s, q)
+        if np.abs(c0[narrow]).max() >= 0.5:
+            sh = [shift_bins(a, c0, bin_m, fv)[0] for a, fv in ((cnt, 0), (res, np.nan), (inten, np.nan),
+                                                                    (have, False), (score, 0))]
+            c0q = shift_bins(cnt, c0, bin_m, 0)[1]
+            L2, R2, C2, okL2, okR2, fc2 = measure(s, *sh, centres, bd, q)
+            L2, R2, C2 = L2 + c0q, R2 + c0q, C2 + c0q
+            st = float(np.median(np.diff(s)))
+            better = narrow & (L2 - R2 > width + 1.0)
+            wgt = np.clip(gaussian_filter1d(uniform_filter1d(better.astype(float), int(31 / st) | 1), 5 / st), 0, 1)
+            wgt = np.clip(wgt * 3, 0, 1)
+            if better.any():
+                print(f"  {better.sum() * st:.0f} m measured too narrow from the road axis (centre line taken "
+                      f"for an edge): measured again from the centre marking")
+                L, R, centre = L + wgt * (L2 - L), R + wgt * (R2 - R), centre + wgt * (C2 - centre)
+                okL, okR = np.where(wgt > 0.5, okL2, okL), np.where(wgt > 0.5, okR2, okR)
+    return L, R, centre, okL, okR, fc
 
 
 # ---------------------------------------------------------------- main
@@ -324,16 +420,7 @@ def main():
     from build_track import DEFAULTS as TRACK_DEFAULTS, road_widths
 
     bd = road_widths(s, st["x"], st["y"], cfg, {**TRACK_DEFAULTS, **(cfg.get("track") or {}), "road_width_m": "auto"})
-    step = step_edges(cnt, res, inten, centres, q)
-    score = marking_score(cnt, inten, rgb, have, centres, q)
-    lines = line_edges(score, centres, step, q)
-    (ll, fl), (rl, fr) = lines["left"], lines["right"]
-    c_line, fc = centre_line(score, centres, ll, rl, fl, fr, step, q)
-    ll, fl, rl, fr = mirror(ll, rl, fl, fr, c_line, fc, q["line_offset_m"])
-    L, okL = fuse(s, ll, fl, step["left"], bd / 2, 1, q)
-    R, okR = fuse(s, rl, fr, step["right"], bd / 2, -1, q)
-    near = lambda ok_: gaussian_filter1d(ok_.astype(float), 5.0) > 0.2
-    L, R, centre = regularize(s, L, R, near(okL), near(okR), c_line, fc, bd, q)
+    L, R, centre, okL, okR, fc = edges_from_bins(s, cnt, res, inten, rgb, have, centres, bd, q)
     width = L - R
     stats = {
         "edge_lines_found_pct": {"left": round(100 * float(okL.mean()), 1), "right": round(100 * float(okR.mean()), 1),
