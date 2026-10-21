@@ -121,6 +121,8 @@ def facade_textures(assets, climate, tex, seed=11):
         img = Image.fromarray((np.clip(arr, 0, 1) * 255).astype(np.uint8))
         _window(img, frame, shutters, rng)
         name = f"facade_{i}"
+        Image.fromarray((np.clip(arr, 0, 1) * 255).astype(np.uint8)).save(tex / f"{name}_plain.png")
+        mats[f"{name}_plain"] = {"texture": f"{name}_plain.png", "kind": "facade"}
         img.save(tex / f"{name}.png")
         mats[name] = {"texture": f"{name}.png", "kind": "facade"}
     # annexes / barns: wood or plain render, no window
@@ -160,19 +162,31 @@ def roof_kind(rgb):
     return "dark" if lum < 0.3 else "grey"
 
 
-def wall_material(props, climate):
-    """Façade material of a BD TOPO building."""
+def wall_material(props, climate, area=0.0):
+    """Façade material of a BD TOPO building; None for an annex (it takes the
+    plain wall of the nearest house, see annex_material)."""
     usage = str(props.get("usage_1") or "")
     nature = str(props.get("nature") or "")
     if nature in ("Eglise", "Chapelle") or usage == "Religieux":
         return "facade_church"
-    if "Industriel" in nature or usage in ("Industriel", "Agricole"):
+    # sheds and barns: farm / industrial use, or a big "industrial, farm or
+    # commercial" building of unknown use (shops and services stay houses)
+    if usage in ("Industriel", "Agricole") or ("Industriel" in nature and usage in ("", "Indifférencié", "None")
+                                               and area > 200):
         return "facade_shed"
     if usage == "Annexe":
-        return "facade_annex"
+        return None
     key = str(props.get("cleabs") or props.get("id") or "")
     h = int(hashlib.md5(key.encode()).hexdigest()[:6], 16)
     return f"facade_{h % len(STYLES[climate])}"
+
+
+def annex_material(house_material):
+    """Annexes (garages, extensions, BD TOPO splits of one house): the render
+    of the house next to them, without windows; wood only far from any house."""
+    if house_material and house_material.startswith("facade_") and house_material[7:].isdigit():
+        return house_material + "_plain"
+    return "facade_annex"
 
 
 # ------------------------------------------------------------- pavements

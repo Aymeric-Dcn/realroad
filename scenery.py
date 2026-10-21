@@ -348,7 +348,26 @@ def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p, climate=None,
 
         sampler = OrthoSampler(tiles)
     if climate:
-        from village import ROOF_REPEAT_M, wall_material
+        from village import ROOF_REPEAT_M, annex_material, wall_material
+
+        # houses first (centroid, style): annexes take the style of the nearest one
+        hc, hm = [], []
+        for f in fc.get("features", []):
+            pr = f.get("properties") or {}
+            for ring in _rings(f.get("geometry") or {}):
+                m_ = wall_material(pr, climate, abs(_signed_area(np.asarray(ring, float))))
+                if m_ and m_.startswith("facade_") and m_[7:].isdigit():
+                    hc.append(np.asarray(ring, float).mean(0))
+                    hm.append(m_)
+        from scipy.spatial import cKDTree as _KD
+
+        htree = _KD(np.array(hc)) if hc else None
+
+        def _nearest_house(c):
+            if htree is None:
+                return None
+            dd, kk = htree.query(c)
+            return hm[kk] if dd < 40 else None
     n_b = n_gable = 0
     bay_u, bay_v = FACADE_BAY_M
     for f in fc.get("features", []):
@@ -380,7 +399,9 @@ def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p, climate=None,
             ti = int(_tile_index(np.array([cxy[0]]), np.array([cxy[1]]), tiles)[0])
             if ti < 0:
                 continue
-            wmat = wall_material(props_, climate) if climate else "facade"
+            wmat = wall_material(props_, climate, area) if climate else "facade"
+            if climate and wmat is None:     # annex: plain wall of the nearest house
+                wmat = annex_material(_nearest_house(ex.mean(0)))
             W = walls.setdefault(wmat, ([], [], []))
             rkind = None
             if sampler is not None:

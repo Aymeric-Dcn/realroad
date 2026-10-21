@@ -872,7 +872,7 @@ def main():
         w.i32(len(mat_names))
         for m in mat_names:
             spec = specs[m]
-            kind = spec.get("kind") or ("terrain" if m.startswith(("ortho_", "vortho_", "backdrop_")) else m)
+            kind = spec.get("kind") or ("terrain" if m.startswith(("ortho_", "vortho_", "portho_", "backdrop_")) else m)
             props = dict(mats.get(kind, mats["terrain"]))
             props.update(spec.get("props") or {})
             if spec.get("alpha") and not props.get("ksAlphaRef"):

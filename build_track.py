@@ -75,6 +75,7 @@ DEFAULTS = {
     "terrain_mask_px": 256,      # resolution of the terrain shader masks (per 400 m orthophoto tile)
     "sidewalks": True,           # pavements and kerbs along the houses (village.py)
     "photo_textures": True,      # CC0 photo textures (assets.py) where available, else procedural
+    "ortho_grade": "auto",       # darken / saturate pale vegetation on the orthophotos (false: off)
     "grass_mask": "auto",        # CSP grass colour mask: auto (from the orthophotos) or {main, red, min_lum, max_lum}
     "csp_trees": "auto",         # CSP 3D trees (trees3d.py): auto = when data/<name>/csp_trees/*.bin exist
     "furniture": True,           # guard rails, walls, edge posts, signs, poles (furniture.py)
@@ -501,6 +502,16 @@ def build_verges(x, y, edges, frame, dtm, p):
     return out
 
 
+def _bool_runs(mask):
+    """(first, last) row of the runs of equal values; consecutive runs share
+    their boundary row so that the strips stay joined."""
+    mask = np.asarray(mask)
+    cuts = np.flatnonzero(np.diff(mask.astype(np.int8))) + 1
+    starts = np.r_[0, cuts]
+    ends = np.r_[cuts, len(mask) - 1]
+    return [(int(a), int(e)) for a, e in zip(starts, ends) if e > a]
+
+
 def tile_runs(px, py, tiles):
     """Split rows into runs lying in the same ortho tile (by the given point);
     consecutive runs share their boundary row so the strip stays closed."""
@@ -727,6 +738,51 @@ def ortho_tile_list(ortho_dir, pattern="ortho_*.jpg"):
     return tiles
 
 
+def ortho_grade_params(ortho, x, y, p, n_tiles=12):
+    """Colour grade of the orthophotos: summer aerial photos of lush regions
+    (Vosges: meadows at luminance 0.4) look pale and washed out from the
+    road, and CSP's grass takes that colour (white grass). The vegetation is
+    brought down to the luminance of the Provence photos (0.33) and a little
+    more saturated; nothing changes where it is already that dark."""
+    from PIL import Image
+
+    if p.get("ortho_grade") is False:
+        return None
+    near = sorted(ortho, key=lambda t: float(np.min(np.hypot(x - (t["bounds"][0] + t["bounds"][2]) / 2,
+                                                                y - (t["bounds"][1] + t["bounds"][3]) / 2))))
+    px = []
+    for t in near[:: max(1, len(near) // n_tiles)][:n_tiles]:
+        im = Image.open(t["file"]).convert("RGB")
+        px.append(np.asarray(im.reduce(max(1, im.size[0] // 250)), np.float32).reshape(-1, 3) / 255)
+    if not px:
+        return None
+    a = np.vstack(px)
+    lum = a @ np.array([0.3, 0.59, 0.11])
+    veg = (a[:, 1] - np.maximum(a[:, 0], a[:, 2])) / np.maximum(lum, 1e-3) > 0.02
+    if veg.sum() < 100:
+        return None
+    med = float(np.median(lum[veg]))
+    gain = float(np.clip(0.33 / max(med, 1e-3), 0.72, 1.0))
+    return None if gain > 0.985 else {"gain": round(gain, 3), "sat": 1.2}
+
+
+def grade_copy(src, dst, g):
+    """Copy an orthophoto tile, graded (ortho_grade_params) when g is set."""
+    if Path(dst).exists():
+        return
+    if not g:
+        shutil.copy(src, dst)
+        return
+    from PIL import Image
+
+    a = np.asarray(Image.open(src).convert("RGB"), np.float32) / 255
+    lum = (a @ np.array([0.3, 0.59, 0.11], np.float32))[..., None]
+    w = np.clip((a[..., 1:2] - np.maximum(a[..., :1], a[..., 2:])) / np.maximum(lum, 1e-3) / 0.08, 0, 1)
+    c = lum + (a - lum) * (1 + (g["sat"] - 1) * w)
+    c *= 1 - w * (1 - g["gain"])
+    Image.fromarray((np.clip(c, 0, 1) * 255).astype(np.uint8)).save(dst, quality=92)
+
+
 def grass_mask(ortho, x, y, p, n_tiles=12):
     """CSP grass colour mask from the orthophotos of this road. CSP grows grass
     on "green enough, not too bright" texels. Tuned on the dry Provence greens
@@ -893,6 +949,14 @@ def main():
             p["verge_follow_m"] = p["verge_outer_m"] - 3.0
             print(f"  roadside from {len(photos.items)} street-level photos (band {p['verge_outer_m']:.0f} m)")
     verges = build_verges(x, y, edges, frame, dtm, p)
+    sw_plan = None
+    if p["sidewalks"] and (d / "buildings_l93.geojson").exists():
+        import village
+        from furniture import Road as _Road
+
+        sw_q = {**village.SIDEWALK, **{k: v for k, v in p.items() if k.startswith("sidewalk")}}
+        sw_road = _Road(s, x, y, frame, dtm, p["verge_m"])
+        sw_plan = village.plan_sidewalks(sw_road, d / "buildings_l93.geojson", d / "route_ign_raw.json", sw_q)
     print("Terrain…")
     terr = build_terrain(x, y, frame, dtm, ortho, p)
     far = build_far_terrain(x, y, dtm, ortho, p)
@@ -981,11 +1045,15 @@ def main():
     if p["verge_texture"] != "ortho":
         materials["verge"] = "verge.png"
 
+    grade = ortho_grade_params(ortho, x, y, p)
+    if grade:
+        print(f"  orthophotos graded: vegetation x{grade['gain']} luminance, x{grade['sat']} saturation")
+
     def use_tile(tile):
         mname = f"ortho_{int(tile['bounds'][0])}_{int(tile['bounds'][1])}"
         if mname not in materials:
             materials[mname] = tile["file"].name
-            shutil.copy(tile["file"], tex / tile["file"].name)
+            grade_copy(tile["file"], tex / tile["file"].name, grade)
         return mname
 
     n_roadside, cov_all = [0], []
@@ -1037,10 +1105,23 @@ def main():
                     vv = np.column_stack([gx_.ravel(), gy_.ravel(), gz_.ravel()])
                     vuv = np.column_stack([np.clip((gx_.ravel() - bx0) / (bx1 - bx0), 0, 1),
                                            np.clip((gy_.ravel() - by0) / (by1 - by0), 0, 1)])
-                    mname = "v" + use_tile(t_)     # same texture, own material: CSP grass mask of its own
-                    verge_mats.add(mname)
-                    add_split(phys_name("GRASS", f"verge_{side[0]}{ci:03d}_{ri}"), mname, vv,
-                        grid_faces(b_ - a_ + 1, VX.shape[1]), vuv, "GRASS")
+                    # same texture, own material: CSP grass mask of its own ("v"), no grass at
+                    # all along the pavements ("p"). No rock split here: the verge overlaps the
+                    # terrain under it and two rock layers flickered.
+                    paved = np.zeros(b_ - a_ + 1, bool)
+                    if sw_plan is not None:
+                        paved = sw_plan[-1 if side == "right" else 1][r0 + a_:r0 + b_ + 1] > 0
+                    for pa_, pb_ in _bool_runs(paved):
+                        sub = slice(pa_, pb_ + 1)
+                        n_r = pb_ - pa_ + 1
+                        if n_r < 2:
+                            continue
+                        mname = ("p" if paved[pa_] else "v") + use_tile(t_)
+                        verge_mats.add(mname)
+                        nc = VX.shape[1]
+                        add(phys_name("GRASS", f"verge_{side[0]}{ci:03d}_{ri}_{pa_}"), mname,
+                            vv.reshape(-1, nc, 3)[sub].reshape(-1, 3), grid_faces(n_r, nc),
+                            vuv.reshape(-1, nc, 2)[sub].reshape(-1, 2), "GRASS")
             else:
                 vv = np.column_stack([VX.ravel(), VY.ravel(), VZ.ravel()])
                 vuv = np.column_stack([np.tile(np.linspace(0, 1, VX.shape[1]), VX.shape[0]),
@@ -1063,19 +1144,19 @@ def main():
     for tile, verts, faces, uvs in terr:
         mname = f"ortho_{int(tile['bounds'][0])}_{int(tile['bounds'][1])}"
         materials[mname] = tile["file"].name
-        shutil.copy(tile["file"], tex / tile["file"].name)
+        grade_copy(tile["file"], tex / tile["file"].name, grade)
         add_split(phys_name("GRASS", f"terrain_{mname[6:]}"), mname, verts, faces, uvs, "GRASS")
     near_mats = set(materials)
     for tile, verts, faces, uvs in far:
         mname = f"ortho_{int(tile['bounds'][0])}_{int(tile['bounds'][1])}"
         if mname not in materials:
             materials[mname] = tile["file"].name
-            shutil.copy(tile["file"], tex / tile["file"].name)
+            grade_copy(tile["file"], tex / tile["file"].name, grade)
         add(phys_name("GRASS", f"far_{mname[6:]}"), mname, verts, faces, uvs, "GRASS")
     for tile, verts, faces, uvs in backdrop:
         mname = f"backdrop_{int(tile['bounds'][0])}_{int(tile['bounds'][1])}"
         materials[mname] = tile["file"].name
-        shutil.copy(tile["file"], tex / tile["file"].name)
+        grade_copy(tile["file"], tex / tile["file"].name, grade)
         add(mname, mname, verts, faces, uvs)                              # visual only
     if backdrop:
         print(f"  distant relief: {len(backdrop)} tiles, {sum(len(b[1]) for b in backdrop):,} vertices")
@@ -1207,16 +1288,13 @@ def main():
                                               f"{k.replace('_', ' ')}: {v}" for k, v in fst.items())
               + ("" if (d / "roadside_points.npz").exists() else
                  "  (no LiDAR roadside points: run `python fetch.py roadside` for the guard rails and walls)"))
-    if p["sidewalks"] and (d / "buildings_l93.geojson").exists():
+    if sw_plan is not None:
         import photo_tex
-        import village
-        from furniture import Acc, Road as _Road
+        from furniture import Acc
 
-        q_ = {**village.SIDEWALK, **{k: v for k, v in p.items() if k.startswith("sidewalk")}}
-        road_ = _Road(s, x, y, frame, dtm, p["verge_m"])
-        plan_ = village.plan_sidewalks(road_, d / "buildings_l93.geojson", d / "route_ign_raw.json", q_)
+        q_ = sw_q
         acc_ = Acc()
-        L_sw = village.build_sidewalks(road_, plan_, q_, acc_)
+        L_sw = village.build_sidewalks(sw_road, sw_plan, q_, acc_)
         if L_sw:
             scen += acc_.meshes()
             materials.update(village.sidewalk_textures(
@@ -1260,7 +1338,8 @@ def main():
         "length_m": float(s[-1]),
         "objects": objects, "materials": materials, "dummies": dm,
         "far_only_materials": far_only,
-        "csp_grass_mask": grass_mask(ortho, x, y, p),
+        "csp_grass_mask": grass_mask([{**t_, "file": tex / t_["file"].name} for t_ in ortho
+                                      if (tex / t_["file"].name).exists()] or ortho, x, y, p),
         "csp_grass_built_up": built_up_areas(d / "buildings_l93.geojson", x, y, x0, y0),
         "csp_trees": csp_list,            # CSP 3D trees: [species, x, y, z, angle, size, width] (kn5_export.py)   # textures only seen from afar: kn5_export uses a lower resolution
     }
