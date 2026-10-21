@@ -643,7 +643,8 @@ def build_backdrop(st_x, st_y, d, p):
     return meshes
 
 
-def apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n_rock, assets=None, climate="temperate"):
+def apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n_rock, assets=None, climate="temperate",
+                           rock_rgb=None):
     """Kunos shaders with detail and normal maps (setups copied from Kunos
     tracks): the road gets asphalt grain, relief and specular maps
     (ksPerPixelMultiMap_NMDetail), steep faces a limestone rock texture with
@@ -671,7 +672,7 @@ def apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n
                                                  ["txNormalDetail", 4, "road_detail_nm.png", "dxt1"]]}
     if n_rock:
         rock_textures(tex)
-        if assets and photo_tex.rock_photo(assets, tex):
+        if assets and photo_tex.rock_photo(assets, tex, rock_rgb):
             photo.append("rock faces")
         materials["rock"] = {"texture": "rock.png", "shader": "ksPerPixelNM", "kind": "rock",
                              "maps": [["txNormal", 1, "rock_nm.png", "dxt1"]]}
@@ -926,6 +927,7 @@ def main():
 
     ortho_sampler_any = OrthoSampler(ortho)
     n_rock = [0]
+    rock_cols, rock_cols_n = [], [0]      # orthophoto colour of the bare rock faces (tints the rock texture)
 
     def add_split(name, material, verts, faces, uvs, surface):
         """Steep triangles (rock faces, road cuts) get the rock material, mapped
@@ -945,7 +947,11 @@ def main():
             col = ortho_sampler_any.colours(cen[:, 0], cen[:, 1]) / 255.0
             bare = (col.mean(1) > 0.36) & (col[:, 1] - (col[:, 0] + col[:, 2]) / 2 < 0.03)
             idx = np.flatnonzero(steep)
-            steep[idx[~(bare | (nz[steep] < cos_cliff))]] = False
+            keep_ = bare | (nz[steep] < cos_cliff)
+            steep[idx[~keep_]] = False
+            if keep_.any():
+                rock_cols.append(col[keep_ & bare].sum(0) if (keep_ & bare).any() else np.zeros(3))
+                rock_cols_n[0] += int((keep_ & bare).sum())
         if steep.any():
             fs = faces[steep]
             used = np.unique(fs)
@@ -1205,7 +1211,8 @@ def main():
         from fetch import TO_WGS as _wgs
 
         _lon, _lat = _wgs.transform(float(np.mean(x)), float(np.mean(y)))
-        apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n_rock[0],
+        rock_rgb = (np.sum(rock_cols, axis=0) / rock_cols_n[0]) if rock_cols_n[0] else None
+        apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n_rock[0], rock_rgb=rock_rgb,
                                assets=photo_tex.assets_dir(d.parent) if p["photo_textures"] else None,
                                climate=photo_tex.climate_of(_lat, _lon))
 

@@ -500,6 +500,7 @@ def rock_textures(out, seed=31, n=1024):
     col *= (0.8 + 0.2 * frac)[..., None]
     col *= (0.85 + 0.15 * strata)[..., None]
     col *= (1.0 - 0.28 * np.clip((streak - 0.55) / 0.3, 0, 1))[..., None] * np.array([1.0, 0.99, 0.97])
+    col *= 0.42 / max(float(col.mean()), 1e-3)                    # mid-dark: sunlit faces burn out
     _save_rgb(out / "rock.png", np.clip(col, 0, 1))
     Image.fromarray(normal_map(hgt * 255, 0.05)).save(out / "rock_nm.png")
 

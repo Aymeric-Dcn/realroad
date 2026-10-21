@@ -249,7 +249,7 @@ def road_photo(assets, out, asphalt_png):
     n = 1024
     rgb = _rgb(col, (n, n))
     spec = 0.06 + 0.3 * (1 - _l(rough, (n, n))) if rough else np.full((n, n), 0.1)
-    _save_rgba(out / "road_detail.png", _detail(rgb, 0.8, 0.85), spec)
+    _save_rgba(out / "road_detail.png", _detail(rgb, 0.8, 1.0, 0.8), spec)
     if nrm:
         Image.open(nrm).convert("RGB").resize((n, n), Image.LANCZOS).save(out / "road_detail_nm.png")
     # diffuse: the procedural base (tone, wheel tracks) times a light photo grain
@@ -281,14 +281,23 @@ def terrain_photo(assets, out, climate):
     return True
 
 
-def rock_photo(assets, out):
+def rock_photo(assets, out, tint=None):
     """Rock faces of the road cuts (ksPerPixelNM): photographed cliff
-    (ambientCG Rock051), diffuse mean ~0.6 and its normal map."""
+    (ambientCG Rock051) and its normal map, coloured like the bare rock of
+    this road on the orthophotos (limestone beige, sandstone pink…) and kept
+    mid-dark (mean 0.42): the faces catch the sun, a light texture burns out."""
     col, nrm = _asset(assets, "Rock051", "Color"), _asset(assets, "Rock051", "NormalGL")
     if not col:
         return False
     n = 1024
-    Image.fromarray((_detail(_rgb(col, (n, n)), 0.6, 0.5) * 255).astype(np.uint8)).save(out / "rock.png")
+    rgb = _detail(_rgb(col, (n, n)), 1.0, 0.85)                 # grey photo, mean 1
+    target = np.array([0.62, 0.58, 0.52]) if tint is None else np.clip(np.asarray(tint, float), 0.2, 0.9)
+    target = target * (0.42 / max(float(target.mean()), 1e-3))
+    Image.fromarray((np.clip(rgb * target, 0, 1) * 255).astype(np.uint8)).save(out / "rock.png")
     if nrm:
-        Image.open(nrm).convert("RGB").resize((n, n), Image.LANCZOS).save(out / "rock_nm.png")
+        # softened relief: the photo's normal map is made for close-up renders
+        nm = _rgb(nrm, (n, n)) * 2 - 1
+        nm[..., :2] *= 0.5
+        nm /= np.linalg.norm(nm, axis=2, keepdims=True)
+        Image.fromarray(((nm * 0.5 + 0.5) * 255).astype(np.uint8)).save(out / "rock_nm.png")
     return True
