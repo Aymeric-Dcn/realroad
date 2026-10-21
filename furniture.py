@@ -210,10 +210,17 @@ def maxspeed_profile(road, osm, ref_regex):
         for kk, dd in zip(k[ok], d[ok]):
             if dd < best[kk]:
                 best[kk], vmax[kk] = dd, v
-    # fill short gaps (junctions) with the neighbours' value
+    # fill short gaps (junctions, < 60 m) with the neighbours' value; longer
+    # stretches without a tagged limit stay unknown (0 = no village, no sign):
+    # a 50 zone at one end must not spread over the whole road
     known = np.flatnonzero(vmax > 0)
     if len(known):
-        vmax = vmax[known[np.clip(np.searchsorted(known, np.arange(len(vmax))), 0, len(known) - 1)]]
+        idx = np.arange(len(vmax))
+        nxt = known[np.clip(np.searchsorted(known, idx), 0, len(known) - 1)]
+        prv = known[np.clip(np.searchsorted(known, idx, side="right") - 1, 0, len(known) - 1)]
+        gap = np.abs(road.s[nxt] - road.s[prv])
+        fill = (vmax == 0) & (gap < 60) & (vmax[prv] == vmax[nxt]) & (prv <= idx) & (nxt >= idx)
+        vmax = np.where(fill, vmax[prv], vmax)
     return vmax
 
 

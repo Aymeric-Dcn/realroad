@@ -64,8 +64,9 @@ def main():
             print(f"    ! optional step '{n}' failed: going on without it")
             continue
         if r.returncode != 0:
-            raise SystemExit(f"\nStep '{n}' failed (exit code {r.returncode}). Fix it, then resume with "
-                             f"`python realroad.py --from {n}`.")
+            again = f"python realroad.py{'' if a.config == 'config.yaml' else ' -c ' + a.config} --from {n}" \
+                    f"{' --install "' + a.install + '"' if a.install else ''}"
+            raise SystemExit(f"\nStep '{n}' failed (exit code {r.returncode}). Fix it, then resume with:\n  {again}")
         print(f"    ({time.time() - t:.0f} s)")
     print(f"\nDone in {(time.time() - t_all) / 60:.1f} min.")
 
