@@ -77,6 +77,7 @@ DEFAULTS = {
     "rock_repeat_m": 4.0,
     "terrain_mask_px": 256,      # resolution of the terrain shader masks (per 400 m orthophoto tile)
     "sidewalks": True,           # pavements and kerbs along the houses (village.py)
+    "side_roads": True,          # first metres of the joining roads and tracks, draped (village.py)
     "photo_textures": True,      # CC0 photo textures (assets.py) where available, else procedural
     "ortho_grade": "auto",       # darken / saturate pale vegetation on the orthophotos (false: off)
     "grass_mask": "auto",        # CSP grass colour mask: auto (from the orthophotos) or {main, red, min_lum, max_lum}
@@ -749,8 +750,26 @@ def build_backdrop(st_x, st_y, d, p):
     return meshes
 
 
+def paved_detail(tex, assets):
+    """Detail layer A of the terrain shader: paving / asphalt around the houses
+    (fine asphalt photo when available), mean 0.6, a little specular."""
+    from PIL import Image
+
+    n = 512
+    ph = None
+    if assets:
+        f = sorted((assets / "Asphalt031").glob("*_Color.jpg"))
+        if f:
+            ph = np.asarray(Image.open(f[0]).convert("L").resize((n, n), Image.LANCZOS), np.float32) / 255
+    if ph is None:
+        ph = 0.5 + 0.08 * np.random.default_rng(4).standard_normal((n, n))
+    ph = np.clip(0.6 + 0.8 * (ph - ph.mean()), 0, 1)
+    rgba = np.dstack([ph, ph, ph * 1.01, np.full((n, n), 0.12)])
+    Image.fromarray((np.clip(rgba, 0, 1) * 255).astype(np.uint8), "RGBA").save(tex / "det_paved.png")
+
+
 def apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n_rock, assets=None, climate="temperate",
-                           rock_rgb=None):
+                           rock_rgb=None, bld_points=None):
     """Kunos shaders with detail and normal maps (setups copied from Kunos
     tracks): the road gets asphalt grain, relief and specular maps
     (ksPerPixelMultiMap_NMDetail), steep faces a limestone rock texture with
@@ -783,6 +802,10 @@ def apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n
         materials["rock"] = {"texture": "rock.png", "shader": "ksPerPixelNM", "kind": "rock",
                              "maps": [["txNormal", 1, "rock_nm.png", "dxt1"]]}
     terrain_detail_textures(tex)
+    paved_detail(tex, assets)
+    bld_tree = None
+    if bld_points is not None and len(bld_points):
+        bld_tree = cKDTree(bld_points)
     if assets and photo_tex.terrain_photo(assets, tex, climate):
         photo.append("terrain detail")
     n = p["terrain_mask_px"]
@@ -801,14 +824,19 @@ def apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n
         z = np.where(np.isfinite(z), z, np.nanmean(z) if np.isfinite(z).any() else 0.0)
         dzy, dzx = np.gradient(z, px_)
         slope = np.degrees(np.arctan(np.hypot(dzx, dzy)))
-        m = terrain_mask(img, slope)
+        vil = None
+        if bld_tree is not None:
+            dd_, _ = bld_tree.query(np.column_stack([GX.ravel(), GY.ravel()]), distance_upper_bound=45)
+            vil = np.clip((45 - np.nan_to_num(dd_, posinf=99)) / 15, 0, 1).reshape(n, n)
+            vil = vil if vil.max() > 0 else None
+        m = terrain_mask(img, slope, vil, bare_rock=climate == "mediterranean")
         Image.fromarray((m * 255 + 0.5).clip(0, 255).astype(np.uint8), "RGBA").save(tex / f"mask_{mname}.png")
         materials[mname] = {"texture": t_["file"].name, "shader": "ksMultilayer_fresnel_nm", "kind": "terrain_ml",
                             "maps": [["txMask", 1, f"mask_{mname}.png", "dxt5"],
                                      ["txDetailR", 2, "det_rock.png", "dxt5"],
                                      ["txDetailG", 3, "det_grass.png", "dxt5"],
                                      ["txDetailB", 4, "det_soil.png", "dxt5"],
-                                     ["txDetailA", 5, "det_grass.png", "dxt5"],
+                                     ["txDetailA", 5, "det_paved.png", "dxt5"],
                                      ["txDetailNM", 21, "det_flat_nm.png", "dxt1"]]}
         n_ml += 1
     print(f"  shaders: road with detail and relief, {n_rock:,} rock triangles, {n_ml} terrain tiles "
@@ -1419,6 +1447,21 @@ def main():
                                               f"{k.replace('_', ' ')}: {v}" for k, v in fst.items())
               + ("" if (d / "roadside_points.npz").exists() else
                  "  (no LiDAR roadside points: run `python fetch.py roadside` for the guard rails and walls)"))
+    if p["side_roads"] and (d / "route_ign_raw.json").exists():
+        import photo_tex
+        import village
+        from furniture import Acc, Road as _Road
+
+        sq = {**village.SIDE_ROADS, **{k: v for k, v in p.items() if k.startswith("side_road")}}
+        acc_sr = Acc()
+        built_sr = village.build_side_roads(_Road(s, x, y, frame, dtm, p["verge_m"]), d / "route_ign_raw.json",
+                                            sq, acc_sr)
+        if built_sr:
+            scen += acc_sr.meshes()
+            materials.update(village.side_road_textures(
+                photo_tex.assets_dir(d.parent) if p["photo_textures"] else None, tex, built_sr))
+            print("  side roads (first metres): " + ", ".join(f"{k.replace('_', ' ')} {v:,.0f} m"
+                                                         for k, v in built_sr.items()))
     if sw_plan is not None:
         import photo_tex
         from furniture import Acc
@@ -1445,13 +1488,16 @@ def main():
         verge_texture(tex / "verge.png")
     if advanced:
         import photo_tex
+        import village
         from fetch import TO_WGS as _wgs
 
         _lon, _lat = _wgs.transform(float(np.mean(x)), float(np.mean(y)))
         rock_rgb = (np.sum(rock_cols, axis=0) / rock_cols_n[0]) if rock_cols_n[0] else None
         apply_advanced_shaders(materials, near_mats, far_only, ortho, dtm, tex, p, n_rock[0], rock_rgb=rock_rgb,
                                assets=photo_tex.assets_dir(d.parent) if p["photo_textures"] else None,
-                               climate=photo_tex.climate_of(_lat, _lon))
+                               climate=photo_tex.climate_of(_lat, _lon),
+                               bld_points=(village.footprint_points_cached(d / "buildings_l93.geojson")
+                                           if (d / "buildings_l93.geojson").exists() else None))
 
     # verge copies of the orthophoto materials (shader, maps and texture shared)
     for vm in sorted(verge_mats):

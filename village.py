@@ -220,6 +220,16 @@ def _footprint_points(geojson, step=1.0):
     return np.vstack(pts) if pts else np.zeros((0, 2))
 
 
+_FP_CACHE = {}
+
+
+def footprint_points_cached(geojson, step=2.0):
+    key = (str(geojson), step)
+    if key not in _FP_CACHE:
+        _FP_CACHE[key] = _footprint_points(geojson, step)
+    return _FP_CACHE[key]
+
+
 def _junctions(ign_raw, road, max_d=15.0):
     """(station, side, half width) of the side roads joining the road (BD TOPO
     segments whose end is next to the carriageway but which are not the road)."""
@@ -397,3 +407,111 @@ def sidewalk_textures(assets, tex):
     Image.fromarray((kerb * 255).astype(np.uint8)).save(tex / "kerb.png")
     return {"sidewalk": {"texture": "sidewalk.png", "kind": "facade"},
             "kerb": {"texture": "kerb.png", "kind": "facade"}}
+
+
+# ------------------------------------------------------------ side roads
+SIDE_ROADS = {
+    "side_roads": True,
+    "side_road_length_m": 70.0,     # built from the junction over this length
+    "side_road_lift_m": 0.04,       # above the LiDAR ground
+}
+# BD TOPO nature → (material, default width)
+SIDE_KIND = {"Route à 1 chaussée": ("street", 4.5), "Route à 2 chaussées": ("street", 6.0),
+             "Bretelle": ("street", 4.0), "Rond-point": ("street", 6.0),
+             "Route empierrée": ("gravel_track", 3.2), "Chemin": ("dirt_track", 2.6)}
+
+
+def build_side_roads(road, ign_raw, q, acc):
+    """The roads and tracks joining the road (BD TOPO), draped on the LiDAR
+    ground over their first metres: real asphalt streets, gravel and dirt
+    tracks instead of their print on the orthophoto. They start at the edge
+    of the carriageway (just under it) and are drivable. Returns {kind: m}."""
+    import json
+
+    if not ign_raw.exists():
+        return {}
+    L_max = q["side_road_length_m"]
+    built = {}
+    for f in json.loads(ign_raw.read_text(encoding="utf-8")):
+        pr = f.get("properties") or {}
+        kind = SIDE_KIND.get(pr.get("nature"))
+        if kind is None or pr.get("acces_vehicule_leger") == "Physiquement impossible":
+            continue
+        mat, w0 = kind
+        w = pr.get("largeur_de_chaussee")
+        w = float(w) if isinstance(w, (int, float)) and w > 1.5 else w0
+        g = f.get("geometry") or {}
+        lines = [g["coordinates"]] if g.get("type") == "LineString" else g.get("coordinates", []) \
+            if g.get("type") == "MultiLineString" else []
+        for ln in lines:
+            c = np.asarray(ln, float)[:, :2]
+            if len(c) < 2:
+                continue
+            d_all, k_all = road.tree.query(c)
+            if np.median(d_all) < 4.0:                    # the road itself
+                continue
+            # start from the end that touches the road
+            if d_all[-1] < d_all[0]:
+                c, d_all, k_all = c[::-1], d_all[::-1], k_all[::-1]
+            k0 = int(k_all[0])
+            half = max(abs(road.f["left"][k0]), abs(road.f["right"][k0]))
+            if d_all[0] > half + 8.0:
+                continue                                   # does not join the road
+            seg = np.hypot(*np.diff(c, axis=0).T)
+            cum = np.r_[0, np.cumsum(seg)]
+            if cum[-1] < 4:
+                continue
+            ss = np.arange(0, min(cum[-1], L_max) + 1e-6, 2.0)
+            P = np.column_stack([np.interp(ss, cum, c[:, 0]), np.interp(ss, cum, c[:, 1])])
+            dP, kP = road.tree.query(P)
+            k_ = kP.copy()
+            halfP = np.where(road.f["left"][k_] > 0, np.maximum(road.f["left"][k_], -road.f["right"][k_]), half)
+            keep = dP >= halfP - 0.6                       # from (just under) the carriageway edge
+            if keep.sum() < 3:
+                continue
+            first = int(np.argmax(keep))
+            P, ss, dP, kP = P[first:], ss[first:], dP[first:], kP[first:]
+            t = np.gradient(P, axis=0)
+            t /= np.maximum(np.linalg.norm(t, axis=1, keepdims=True), 1e-9)
+            nrm = np.column_stack([-t[:, 1], t[:, 0]])
+            # wider mouth at the junction (the corners are rounded on real roads)
+            ww = w / 2 + np.clip(3.0 - (ss - ss[0]), 0, 3.0) * 0.8
+            Lp, Rp = P + nrm * ww[:, None], P - nrm * ww[:, None]
+            zL = road.dtm.sample(Lp[:, 0], Lp[:, 1])
+            zR = road.dtm.sample(Rp[:, 0], Rp[:, 1])
+            zc = road.dtm.sample(P[:, 0], P[:, 1])
+            if not (np.isfinite(zL).all() and np.isfinite(zR).all() and np.isfinite(zc).all()):
+                continue
+            # cross slope limited, ground followed; at the junction 1 cm under the road surface
+            zc = zc + q["side_road_lift_m"]
+            zL = np.clip(zL + q["side_road_lift_m"], zc - 0.15 * ww, zc + 0.15 * ww)
+            zR = np.clip(zR + q["side_road_lift_m"], zc - 0.15 * ww, zc + 0.15 * ww)
+            zr0 = road.road_z(kP[:1], np.array([0.0]))[0] - 0.01
+            blend = np.clip((ss - ss[0]) / 4.0, 0, 1)
+            zL = zr0 + (zL - zr0) * blend
+            zR = zr0 + (zR - zr0) * blend
+            n = len(P)
+            V = np.vstack([np.column_stack([Lp, zL]), np.column_stack([Rp, zR])])
+            F = [[i, n + i, n + i + 1] for i in range(n - 1)] + [[i, n + i + 1, i + 1] for i in range(n - 1)]
+            UV = np.vstack([np.column_stack([np.full(n, 0.0), ss / 4.0]),
+                            np.column_stack([np.full(n, 2 * ww.mean() / 4.0), ss / 4.0])])
+            acc.add(f"side_{mat}", mat, V, np.array(F), UV, {"surface": "ROAD"})
+            built[mat] = built.get(mat, 0.0) + float(ss[-1] - ss[0])
+    return built
+
+
+def side_road_textures(assets, tex, kinds):
+    """street: grey asphalt (darker than the pavements); gravel and dirt tracks."""
+    rng = np.random.default_rng(8)
+    out = {}
+    for mat in kinds:
+        aid, mean = {"street": ("Asphalt031", 0.30), "gravel_track": ("Ground110", 0.45),
+                     "dirt_track": ("Ground078", 0.42)}[mat]
+        ph = _photo(assets, aid, (512, 512))
+        if ph is None:
+            ph = np.clip(_render(rng, (512, 512)), 0, 2).repeat(3, 2) * (
+                np.array([1, 1, 1.02]) if mat == "street" else np.array([1.1, 1.0, 0.85]))
+        img = np.clip(ph * (mean / max(float(ph.mean()), 1e-3)), 0, 1)
+        Image.fromarray((img * 255).astype(np.uint8)).save(tex / f"{mat}.png")
+        out[mat] = {"texture": f"{mat}.png", "kind": "facade"}
+    return out

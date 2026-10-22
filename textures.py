@@ -552,10 +552,11 @@ def terrain_detail_textures(out, seed=51, n=1024):
     Image.fromarray(np.full((64, 64, 3), (128, 128, 255), np.uint8)).save(out / "det_flat_nm.png")
 
 
-def terrain_mask(ortho_rgb, slope_deg):
+def terrain_mask(ortho_rgb, slope_deg, village=None, bare_rock=True):
     """Mask of the terrain shader for one orthophoto tile: R rock (steep or
-    bright bare limestone), B gravel / soil (beige, low saturation), G the
-    rest (vegetation, grass). R + G + B = 1, A = 0. ortho_rgb in [0, 1]."""
+    bright bare limestone), B gravel / soil (beige, low saturation, not
+    green), G the rest (vegetation, grass), A paving around the houses
+    (village: 0-1 weight, None elsewhere). Sum 1. ortho_rgb in [0, 1]."""
     from scipy.ndimage import gaussian_filter
 
     r, g, b = ortho_rgb[..., 0], ortho_rgb[..., 1], ortho_rgb[..., 2]
@@ -563,10 +564,28 @@ def terrain_mask(ortho_rgb, slope_deg):
     sat = ortho_rgb.max(2) - ortho_rgb.min(2)
     rock = np.clip((slope_deg - 32) / 18, 0, 1)
     grey = np.clip((0.14 - sat) / 0.08, 0, 1)
-    rock = np.maximum(rock, np.clip((lum - 0.5) / 0.12, 0, 1) * grey)            # bare limestone
-    soil = np.clip((lum - 0.34) / 0.1, 0, 1) * np.maximum(grey, np.clip((r - g + 0.03) / 0.06, 0, 1))
+    bright = np.clip((lum - 0.5) / 0.12, 0, 1) * grey                            # bare limestone…
+    flat = np.clip((30 - slope_deg) / 10, 0, 1)
+    if village is not None:
+        bright = bright * (1 - village * flat)                                   # …or concrete in villages
+    if bare_rock:
+        rock = np.maximum(rock, bright)
+    else:                     # temperate: bright grey flat ground = stubble, gravel, not limestone
+        rock = np.maximum(rock, bright * (1 - flat))
+    green = (g - np.maximum(r, b)) / np.maximum(lum, 1e-3)
+    notgreen = np.clip((0.05 - green) / 0.05, 0, 1)          # pale meadows (Vosges) are not soil
+    soil = np.clip((lum - 0.34) / 0.1, 0, 1) * np.maximum(grey, np.clip((r - g + 0.03) / 0.06, 0, 1)) * notgreen
     rock = gaussian_filter(rock, 1.5)
     soil = gaussian_filter(soil, 1.5) * (1 - rock)
     grass = np.clip(1 - rock - soil, 0, 1)
-    tot = rock + soil + grass + 1e-6
-    return np.dstack([rock / tot, grass / tot, soil / tot, np.zeros_like(lum)])
+    paved = np.zeros_like(lum)
+    if village is not None:
+        # around the houses: grey, unsaturated and flat = asphalt, concrete,
+        # paving (yards, parkings, lanes) → A layer (paving detail)
+        # (dark grey = tree shadows: not paved)
+        g_ = np.clip((0.09 - sat) / 0.04, 0, 1) * np.clip((lum - 0.32) / 0.05, 0, 1) \
+            * np.clip((0.02 - green) / 0.03, 0, 1)
+        paved = gaussian_filter(g_ * flat, 1.0) * village
+        rock, soil, grass = rock * (1 - paved), soil * (1 - paved), grass * (1 - paved)
+    tot = rock + soil + grass + paved + 1e-6
+    return np.dstack([rock / tot, grass / tot, soil / tot, paved / tot])
