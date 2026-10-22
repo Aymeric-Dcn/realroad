@@ -3,3 +3,5 @@ data/
 __pycache__/
 *.part
 mapillary_token.txt
+tools/*.exe
+tools/*.dll

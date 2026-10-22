@@ -51,10 +51,12 @@ STEPS = [
     ("trees3d", ["trees3d.py"], "3D tree models for CSP, sources (optional; then Blender + CM)"),
     ("build_track", ["build_track.py"], "track geometry"),
     ("kn5_export", ["kn5_export.py"], "Assetto Corsa track folder"),
+    ("vao", ["vao.py"], "baked ambient occlusion for CSP (optional; needs tools/CustomTracksBakery.exe)"),
     ("streetview_sheet", ["streetview_sheet.py"], "street-level comparison sheet (optional)"),
 ]
 
-OPTIONAL = {"far", "mnh", "buildings", "streetview", "roadside", "assets", "trees3d", "trees", "streetview_sheet"}
+OPTIONAL = {"far", "mnh", "buildings", "streetview", "roadside", "assets", "trees3d", "trees", "vao",
+            "streetview_sheet"}
 DOWNLOADS = {"osm", "mnt", "ortho", "lidar", "far", "mnh", "buildings", "streetview", "roadside", "assets"}
 # Street-level photos only serve the comparison sheet: skipped unless asked for
 SKIP_BY_DEFAULT = {"streetview", "streetview_sheet"}
@@ -324,8 +326,10 @@ def main():
             if (cfg["_dir"] / "route_l93.geojson").exists():
                 show_estimate(cfg, ac, a.clean, not a.yes)
         args = [sys.executable, *cmd, "-c", a.config]
-        if n == "kn5_export" and ac:
+        if n in ("kn5_export", "vao") and ac:
             args += ["--install", str(ac)]
+        if n == "vao" and not ac:
+            continue
         print(f"\n=== {n}: {what}", flush=True)
         t = time.time()
         r = subprocess.run(args)

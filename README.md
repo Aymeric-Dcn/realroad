@@ -108,6 +108,14 @@ dernières étapes.
 Les téléchargements reprennent là où ils s'étaient arrêtés.
 Les données vont dans `data/<nom-du-tronçon>/` (ignoré par Git).
 
+### Ombrage précalculé (VAO, optionnel)
+
+Pour un rendu plus contrasté avec Custom Shaders Patch (pied des murs, sous les
+arbres, fossés), mettez `CustomTracksBakery.exe` et `SlimDX.dll` (outil gratuit
+de l'auteur de CSP, [lien sur assettocorsamods.net](https://assettocorsamods.net/threads/creating-a-vao-patch.1858))
+dans `tools/` : `realroad.py --install` génère alors
+`assettocorsa/extension/vao-patches/<piste>.vao-patch` après l'export.
+
 ### Comment ça marche
 
 | Étape | Source | Détail |
@@ -215,6 +223,14 @@ plus the AI line, minimap, replay cameras and Content Manager previews.
 
 Downloads resume where they stopped. Data goes to `data/<section-name>/`
 (git-ignored).
+
+### Baked ambient occlusion (VAO, optional)
+
+For a more contrasted look with Custom Shaders Patch (foot of the walls, under
+the trees, ditches), put `CustomTracksBakery.exe` and `SlimDX.dll` (free tool by
+the author of CSP, [link on assettocorsamods.net](https://assettocorsamods.net/threads/creating-a-vao-patch.1858))
+in `tools/`: `realroad.py --install` then writes
+`assettocorsa/extension/vao-patches/<track>.vao-patch` after the export.
 
 ### How it works
 
