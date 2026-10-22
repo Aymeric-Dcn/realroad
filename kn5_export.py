@@ -90,7 +90,7 @@ def csp_trees_list(trees):
     return "\n".join(lines) + "\n"
 
 
-def csp_ext_config(materials, trees_list=None, mask=None, built_up=()):
+def csp_ext_config(materials, trees_list=None, mask=None, built_up=(), no_grass=()):
     """Custom Shaders Patch settings for the track (ignored without CSP):
     3D grass on the green parts of the verges and terrain, wet road in the
     rain. CSP material filters: `?` matches any end of the name."""
@@ -155,6 +155,13 @@ def csp_ext_config(materials, trees_list=None, mask=None, built_up=()):
     for i, (cx, cz, sx, sz) in enumerate(built_up):
         lines += [f"[GRASS_FX_ADJUSTMENT_{i}]", f"CENTER = {cx}, {cz}", f"SIZE = {sx}, {sz}",
                   "ANGLE = 0", "MAP = B", ""]
+    if no_grass:
+        # side roads and tracks: no grass at all (occluding materials did not hide it)
+        lines += ["[GRASS_FX_CONFIGURATION_D]", "MASK_MAIN_THRESHOLD = 5.0", "MASK_MIN_LUMINANCE = 1.0",
+                  "MASK_MAX_LUMINANCE = 0.0", ""]
+        for i, (cx, cz, sx, sz, ang) in enumerate(no_grass):
+            lines += [f"[GRASS_FX_ADJUSTMENT_ROAD_{i}]", f"CENTER = {cx}, {cz}", f"SIZE = {sx}, {sz}",
+                      f"ANGLE = {ang}", "MAP = D", ""]
     lines += [
         "[RAIN_FX]",
         f"PUDDLES_MATERIALS = {'road' if 'road' in materials else ''}",
@@ -917,7 +924,8 @@ def main():
     if p["csp_config"] or trees_list:
         (out / "extension").mkdir(exist_ok=True)
         (out / "extension" / "ext_config.ini").write_text(
-            csp_ext_config(mat_names, trees_list, man.get("csp_grass_mask"), man.get("csp_grass_built_up") or ()),
+            csp_ext_config(mat_names, trees_list, man.get("csp_grass_mask"), man.get("csp_grass_built_up") or (),
+                           man.get("csp_no_grass") or ()),
             encoding="utf-8")
         if man.get("csp_grass_mask"):
             print(f"  CSP grass mask {man['csp_grass_mask']}, "

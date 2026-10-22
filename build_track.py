@@ -911,6 +911,15 @@ def grade_copy(src, dst, g, match=None):
     Image.fromarray((np.clip(c, 0, 1) * 255).astype(np.uint8)).save(dst, quality=92)
 
 
+def grass_mask_c(ortho, x, y, p, n_tiles=12):
+    """grass_mask with the road's climate."""
+    import photo_tex
+    from fetch import TO_WGS as _wgs
+
+    lon, lat = _wgs.transform(float(np.mean(x)), float(np.mean(y)))
+    return grass_mask(ortho, x, y, {**p, "_climate": photo_tex.climate_of(lat, lon)}, n_tiles)
+
+
 def grass_mask(ortho, x, y, p, n_tiles=12):
     """CSP grass colour mask from the orthophotos of this road. CSP grows grass
     on "green enough, not too bright" texels. Tuned on the dry Provence greens
@@ -943,6 +952,9 @@ def grass_mask(ortho, x, y, p, n_tiles=12):
         return {"main": 0.08, "red": 0.35, "min_lum": 0.03, "max_lum": 0.42}
     main = float(np.clip(2 * np.percentile(g[veg], 25), 0.08, 0.3))
     max_lum = float(np.clip(np.percentile(L[veg] / 255, 90) + 0.03, 0.35, 0.46))
+    if p.get("_climate") == "temperate":
+        # lush regions: pale texels (meadows in full sun, farmyards) gave white grass
+        main, max_lum = max(main, 0.18), min(max_lum, 0.4)
     return {"main": round(main, 3), "red": 0.35, "min_lum": 0.03, "max_lum": round(max_lum, 3)}
 
 
@@ -1447,6 +1459,7 @@ def main():
                                               f"{k.replace('_', ' ')}: {v}" for k, v in fst.items())
               + ("" if (d / "roadside_points.npz").exists() else
                  "  (no LiDAR roadside points: run `python fetch.py roadside` for the guard rails and walls)"))
+    no_grass_l93 = []        # rotated rectangles (Lambert-93) where CSP grows no grass
     if p["side_roads"] and (d / "route_ign_raw.json").exists():
         import photo_tex
         import village
@@ -1455,7 +1468,7 @@ def main():
         sq = {**village.SIDE_ROADS, **{k: v for k, v in p.items() if k.startswith("side_road")}}
         acc_sr = Acc()
         built_sr = village.build_side_roads(_Road(s, x, y, frame, dtm, p["verge_m"]), d / "route_ign_raw.json",
-                                            sq, acc_sr)
+                                            sq, acc_sr, no_grass_l93)
         if built_sr:
             scen += acc_sr.meshes()
             materials.update(village.side_road_textures(
@@ -1515,9 +1528,11 @@ def main():
         "length_m": float(s[-1]),
         "objects": objects, "materials": materials, "dummies": dm,
         "far_only_materials": far_only,
-        "csp_grass_mask": grass_mask([{**t_, "file": tex / t_["file"].name} for t_ in ortho
+        "csp_grass_mask": grass_mask_c([{**t_, "file": tex / t_["file"].name} for t_ in ortho
                                       if (tex / t_["file"].name).exists()] or ortho, x, y, p),
         "csp_grass_built_up": built_up_areas(d / "buildings_l93.geojson", x, y, x0, y0),
+        "csp_no_grass": [[round(cx - x0, 1), round(-(cy - y0), 1), round(sx, 1), round(sz, 1), round(-ang, 1)]
+                         for cx, cy, sx, sz, ang in no_grass_l93],
         "csp_trees": csp_list,            # CSP 3D trees: [species, x, y, z, angle, size, width] (kn5_export.py)   # textures only seen from afar: kn5_export uses a lower resolution
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")

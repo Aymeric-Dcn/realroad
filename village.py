@@ -192,7 +192,7 @@ def annex_material(house_material):
 # ------------------------------------------------------------- pavements
 SIDEWALK = {
     "sidewalks": True,
-    "sidewalk_building_m": 12.0,   # a house within this distance of the road edge: village street
+    "sidewalk_building_m": 18.0,   # a house within this distance of the road edge: village street
     "sidewalk_share": 0.35,        # ... on this share of the 100 m around
     "sidewalk_width_m": 1.6,       # (narrower when the house is closer)
     "sidewalk_min_m": 0.8,
@@ -421,7 +421,7 @@ SIDE_KIND = {"Route à 1 chaussée": ("street", 4.5), "Route à 2 chaussées": (
              "Route empierrée": ("gravel_track", 3.2), "Chemin": ("dirt_track", 2.6)}
 
 
-def build_side_roads(road, ign_raw, q, acc):
+def build_side_roads(road, ign_raw, q, acc, no_grass=None):
     """The roads and tracks joining the road (BD TOPO), draped on the LiDAR
     ground over their first metres: real asphalt streets, gravel and dirt
     tracks instead of their print on the orthophoto. They start at the edge
@@ -430,6 +430,8 @@ def build_side_roads(road, ign_raw, q, acc):
 
     if not ign_raw.exists():
         return {}
+    if no_grass is None:
+        no_grass = []
     L_max = q["side_road_length_m"]
     built = {}
     for f in json.loads(ign_raw.read_text(encoding="utf-8")):
@@ -497,6 +499,17 @@ def build_side_roads(road, ign_raw, q, acc):
                             np.column_stack([np.full(n, 2 * ww.mean() / 4.0), ss / 4.0])])
             acc.add(f"side_{mat}", mat, V, np.array(F), UV, {"surface": "ROAD"})
             built[mat] = built.get(mat, 0.0) + float(ss[-1] - ss[0])
+            # rectangles along it (every ~4 m, nearly square so that their
+            # orientation hardly matters) where CSP must not grow grass
+            for i0 in range(0, n - 1, 2):
+                i1 = min(n - 1, i0 + 2)
+                a_, b_ = P[i0], P[i1]
+                L_ = float(np.hypot(*(b_ - a_)))
+                if L_ < 0.5:
+                    continue
+                ang = float(np.degrees(np.arctan2(b_[1] - a_[1], b_[0] - a_[0])))
+                no_grass.append([float((a_[0] + b_[0]) / 2), float((a_[1] + b_[1]) / 2),
+                                 L_ + 1.0, float(2 * ww[i0:i1 + 1].max() + 1.0), ang])
     return built
 
 
@@ -506,11 +519,14 @@ def side_road_textures(assets, tex, kinds):
     out = {}
     for mat in kinds:
         aid, mean = {"street": ("Asphalt031", 0.30), "gravel_track": ("Ground110", 0.45),
-                     "dirt_track": ("Ground078", 0.42)}[mat]
+                     "dirt_track": ("Ground110", 0.36)}[mat]
         ph = _photo(assets, aid, (512, 512))
         if ph is None:
             ph = np.clip(_render(rng, (512, 512)), 0, 2).repeat(3, 2) * (
                 np.array([1, 1, 1.02]) if mat == "street" else np.array([1.1, 1.0, 0.85]))
+        if mat == "dirt_track":          # brown earth with some gravel, not orange
+            lum = ph.mean(2, keepdims=True)
+            ph = lum * np.array([1.08, 0.98, 0.84]) + 0.25 * (ph - lum)
         img = np.clip(ph * (mean / max(float(ph.mean()), 1e-3)), 0, 1)
         Image.fromarray((img * 255).astype(np.uint8)).save(tex / f"{mat}.png")
         out[mat] = {"texture": f"{mat}.png", "kind": "facade"}

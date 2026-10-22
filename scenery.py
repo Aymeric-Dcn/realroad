@@ -403,6 +403,14 @@ def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p, climate=None,
             if climate and wmat is None:     # annex: plain wall of the nearest house
                 wmat = annex_material(_nearest_house(ex.mean(0)))
             W = walls.setdefault(wmat, ([], [], []))
+            # plain wall (no windows) for the basement on slopes and the gables
+            pmat = wmat + "_plain" if (climate and wmat.startswith("facade_") and wmat[7:].isdigit()) else wmat
+            Wp = walls.setdefault(pmat, ([], [], []))
+            # floors: BD TOPO number of storeys, else ~2.9 m each, from the uphill ground
+            floor0 = top_ground - 0.15
+            n_fl = props_.get("nombre_d_etages")
+            n_fl = int(n_fl) if isinstance(n_fl, (int, float)) and n_fl >= 1 else max(1, round((z_eave - floor0) / 2.9))
+            fl_h = float(np.clip((z_eave - floor0) / n_fl, 2.4, 3.8))
             rkind = None
             if sampler is not None:
                 from village import roof_kind
@@ -422,10 +430,19 @@ def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p, climate=None,
                 L = float(np.hypot(*(b_ - a_)))
                 if L < 0.05:
                     continue
-                v = np.array([[*a_, z_base], [*b_, z_base], [*b_, z_eave], [*a_, z_eave]])
-                uv = np.array([[cum / bay_u, (z_base - ground) / bay_v], [(cum + L) / bay_u, (z_base - ground) / bay_v],
-                               [(cum + L) / bay_u, (z_eave - ground) / bay_v], [cum / bay_u, (z_eave - ground) / bay_v]])
-                _append(W, v, np.array([[0, 1, 2], [0, 2, 3]]), uv)
+                # one window row per floor: v counts floors from the uphill ground;
+                # below it (downhill side of a slope) a plain basement wall
+                if floor0 - z_base > 0.3:
+                    v = np.array([[*a_, z_base], [*b_, z_base], [*b_, floor0], [*a_, floor0]])
+                    uv = np.array([[cum / bay_u, (z_base - floor0) / bay_v], [(cum + L) / bay_u, (z_base - floor0) / bay_v],
+                                   [(cum + L) / bay_u, 0.0], [cum / bay_u, 0.0]])
+                    _append(Wp, v, np.array([[0, 1, 2], [0, 2, 3]]), uv)
+                zb = max(z_base, min(floor0, z_eave - 1.0))
+                tgt = W if L >= 2.0 else Wp
+                v = np.array([[*a_, zb], [*b_, zb], [*b_, z_eave], [*a_, z_eave]])
+                uv = np.array([[cum / bay_u, (zb - floor0) / fl_h], [(cum + L) / bay_u, (zb - floor0) / fl_h],
+                               [(cum + L) / bay_u, (z_eave - floor0) / fl_h], [cum / bay_u, (z_eave - floor0) / fl_h]])
+                _append(tgt, v, np.array([[0, 1, 2], [0, 2, 3]]), uv)
                 cum += L
             # roof
             q, rect_area = _min_rect(ex)
@@ -461,7 +478,7 @@ def build_buildings(geojson, dtm, tiles, axis_tree, half_width, p, climate=None,
                                    [L / 2 / bay_u, (z_ridge - ground) / bay_v]])
                     nrm = np.cross(v[1] - v[0], v[2] - v[0])[:2]
                     tri = [[0, 1, 2]] if np.dot(nrm, (pa + pb) / 2 - cen) >= 0 else [[0, 2, 1]]  # face outwards
-                    _append(W, v, np.array(tri), uv)
+                    _append(Wp, v, np.array(tri), uv)       # gables: no windows
             else:
                 tris = _ear_clip(ex)
                 if tris:

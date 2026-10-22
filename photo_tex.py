@@ -251,7 +251,11 @@ def road_photo(assets, out, asphalt_png):
     spec = 0.06 + 0.3 * (1 - _l(rough, (n, n))) if rough else np.full((n, n), 0.1)
     _save_rgba(out / "road_detail.png", _detail(rgb, 0.8, 1.0, 0.8), spec)
     if nrm:
-        Image.open(nrm).convert("RGB").resize((n, n), Image.LANCZOS).save(out / "road_detail_nm.png")
+        # softened: the full photo relief sparkled (coloured speckle) on the road at a distance
+        nm = _rgb(nrm, (n, n)) * 2 - 1
+        nm[..., :2] *= 0.35
+        nm /= np.linalg.norm(nm, axis=2, keepdims=True)
+        Image.fromarray(((nm * 0.5 + 0.5) * 255).astype(np.uint8)).save(out / "road_detail_nm.png")
     # diffuse: the procedural base (tone, wheel tracks) times a light photo grain
     base = np.asarray(Image.open(asphalt_png).convert("RGB"), np.float32) / 255
     h, w = base.shape[:2]
